@@ -47,6 +47,9 @@ import org.objectweb.asm.util.TraceMethodVisitor;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.ArrayDeque;
 import java.util.Arrays;
@@ -60,6 +63,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.jar.JarEntry;
+import java.util.jar.JarOutputStream;
 
 final class McpTools {
     private static final Gson GSON = new Gson();
@@ -67,6 +72,8 @@ final class McpTools {
     private static final int MAX_LIMIT = 500;
     private static final int MAX_TEXT_LENGTH = 2_000_000;
     private static final int MAX_CLASS_FILE_BYTES = 8 * 1024 * 1024;
+    private static final int MAX_RESOURCE_BYTES = 32 * 1024 * 1024;
+    private static final int MAX_RESOURCE_CHUNK_BYTES = 1024 * 1024;
 
     private final PluginContext context;
     private final McpWorkspace workspace;
@@ -148,6 +155,46 @@ final class McpTools {
         hotSwapProperties.add("class", stringProperty("Optional changed class to validate. Omit to validate all changes."));
         tools.add(tool("validate_hotswap", "Check changes against standard JVM class-redefinition restrictions.",
                 schema(hotSwapProperties), true, true));
+
+        JsonObject listResourceProperties = pagedProperties();
+        listResourceProperties.add("query", stringProperty("Optional case-insensitive resource-path filter."));
+        tools.add(tool("list_resources", "List non-class entries in the active archive.",
+                schema(listResourceProperties), true, true));
+        JsonObject resourceProperties = new JsonObject();
+        resourceProperties.add("path", stringProperty("Archive entry path using forward slashes."));
+        JsonObject getResourceProperties = resourceProperties.deepCopy();
+        getResourceProperties.add("offset", integerProperty("Zero-based byte offset. Defaults to 0.", 0, null));
+        getResourceProperties.add("length", integerProperty(
+                "Maximum bytes to return. Defaults to 1048576.", 1, MAX_RESOURCE_CHUNK_BYTES));
+        tools.add(tool("get_resource", "Return a chunk of an archive resource as Base64 with a UTF-8 preview when practical.",
+                schema(getResourceProperties, "path"), true, true));
+        JsonObject resourceDataProperties = resourceProperties.deepCopy();
+        resourceDataProperties.add("dataBase64", stringProperty("Base64-encoded resource bytes."));
+        tools.add(tool("add_resource", "Add a new non-class entry to the active archive.",
+                schema(resourceDataProperties, "path", "dataBase64"), false, true, false));
+        tools.add(tool("replace_resource", "Replace an existing non-class archive entry.",
+                schema(resourceDataProperties, "path", "dataBase64"), false, true, true));
+        tools.add(tool("delete_resource", "Delete a non-class entry from the active archive.",
+                schema(resourceProperties, "path"), false, true, true));
+        tools.add(tool("get_manifest", "Return META-INF/MANIFEST.MF as text.",
+                schema(new JsonObject()), true, true));
+        JsonObject manifestProperties = new JsonObject();
+        manifestProperties.add("content", stringProperty("Complete UTF-8 manifest content."));
+        tools.add(tool("edit_manifest", "Add or replace META-INF/MANIFEST.MF from text.",
+                schema(manifestProperties, "content"), false, true, true));
+
+        JsonObject exportClassProperties = new JsonObject();
+        exportClassProperties.add("class", stringProperty("JVM internal or dotted class name."));
+        exportClassProperties.add("path", stringProperty("Output .class path, or an existing directory."));
+        tools.add(tool("export_class", "Write one current class file to disk.",
+                schema(exportClassProperties, "class", "path"), false, true, true));
+        JsonObject exportPackageProperties = new JsonObject();
+        exportPackageProperties.add("package", stringProperty("JVM internal or dotted package name."));
+        exportPackageProperties.add("path", stringProperty("Output JAR path."));
+        exportPackageProperties.add("includeSubpackages", booleanProperty(
+                "Whether to include child packages. Defaults to true."));
+        tools.add(tool("export_package", "Write classes from a loaded package to a JAR.",
+                schema(exportPackageProperties, "package", "path"), false, true, true));
 
         JsonObject listClassProperties = new JsonObject();
         listClassProperties.add("query", stringProperty("Optional case-insensitive class name filter."));
@@ -431,6 +478,15 @@ final class McpTools {
                 case "redo_change" -> historyResult(workspace.redo());
                 case "discard_changes" -> discardChanges(arguments);
                 case "validate_hotswap" -> validateHotSwap(arguments);
+                case "list_resources" -> listResources(arguments);
+                case "get_resource" -> getResource(arguments);
+                case "add_resource" -> putResource(arguments, false);
+                case "replace_resource" -> putResource(arguments, true);
+                case "delete_resource" -> deleteResource(arguments);
+                case "get_manifest" -> getManifest();
+                case "edit_manifest" -> editManifest(arguments);
+                case "export_class" -> exportClass(arguments);
+                case "export_package" -> exportPackage(arguments);
                 case "list_classes" -> listClasses(arguments);
                 case "search_members" -> searchMembers(arguments);
                 case "search_constants" -> searchConstants(arguments);
@@ -676,6 +732,141 @@ final class McpTools {
         result.addProperty("compatible", compatible);
         result.addProperty("checkedClassCount", names.size());
         result.add("classes", checkedClasses);
+        return result;
+    }
+
+    private JsonObject listResources(JsonObject arguments) {
+        String query = optionalString(arguments, "query", "").toLowerCase(Locale.ROOT);
+        Page page = page(arguments);
+        for (String path : context.getResourceNames()) {
+            if (!query.isEmpty() && !path.toLowerCase(Locale.ROOT).contains(query)) {
+                continue;
+            }
+            byte[] bytes = context.getResource(path);
+            JsonObject item = new JsonObject();
+            item.addProperty("path", path);
+            item.addProperty("byteLength", bytes == null ? 0 : bytes.length);
+            page.add(item);
+        }
+        return page.result("resources");
+    }
+
+    private JsonObject getResource(JsonObject arguments) {
+        String path = requiredString(arguments, "path");
+        byte[] bytes = context.getResource(path);
+        if (bytes == null) {
+            throw new IllegalArgumentException("Resource not found: " + path);
+        }
+        int requestedOffset = optionalInt(arguments, "offset", 0, 0, Integer.MAX_VALUE);
+        int offset = Math.min(requestedOffset, bytes.length);
+        int length = optionalInt(arguments, "length", MAX_RESOURCE_CHUNK_BYTES, 1, MAX_RESOURCE_CHUNK_BYTES);
+        int end = Math.min(offset + length, bytes.length);
+        byte[] chunk = Arrays.copyOfRange(bytes, offset, end);
+        JsonObject result = resourceResult(path, bytes);
+        result.addProperty("offset", offset);
+        result.addProperty("returnedByteLength", chunk.length);
+        result.addProperty("hasMore", end < bytes.length);
+        result.addProperty("dataBase64", Base64.getEncoder().encodeToString(chunk));
+        String preview = textPreview(chunk);
+        if (preview != null) {
+            result.addProperty("textPreview", preview);
+        }
+        return result;
+    }
+
+    private JsonObject putResource(JsonObject arguments, boolean replace) {
+        String path = requiredString(arguments, "path");
+        byte[] current = context.getResource(path);
+        if (replace && current == null) {
+            throw new IllegalArgumentException("Resource not found: " + path);
+        }
+        if (!replace && current != null) {
+            throw new IllegalArgumentException("Resource already exists: " + path);
+        }
+        byte[] bytes = decodeBase64(arguments, "dataBase64", MAX_RESOURCE_BYTES);
+        context.putResource(path, bytes);
+        JsonObject result = resourceResult(path, bytes);
+        result.addProperty(replace ? "replaced" : "added", true);
+        return result;
+    }
+
+    private JsonObject deleteResource(JsonObject arguments) {
+        String path = requiredString(arguments, "path");
+        if (!context.removeResource(path)) {
+            throw new IllegalArgumentException("Resource not found: " + path);
+        }
+        JsonObject result = new JsonObject();
+        result.addProperty("path", path);
+        result.addProperty("deleted", true);
+        return result;
+    }
+
+    private JsonObject getManifest() {
+        byte[] bytes = context.getResource("META-INF/MANIFEST.MF");
+        if (bytes == null) {
+            throw new IllegalArgumentException("The active archive has no manifest");
+        }
+        JsonObject result = resourceResult("META-INF/MANIFEST.MF", bytes);
+        result.addProperty("content", limit(new String(bytes, StandardCharsets.UTF_8)));
+        return result;
+    }
+
+    private JsonObject editManifest(JsonObject arguments) {
+        byte[] bytes = requiredStringAllowEmpty(arguments, "content").getBytes(StandardCharsets.UTF_8);
+        if (bytes.length > MAX_RESOURCE_BYTES) {
+            throw new IllegalArgumentException("Manifest exceeds " + MAX_RESOURCE_BYTES + " bytes");
+        }
+        context.putResource("META-INF/MANIFEST.MF", bytes);
+        JsonObject result = resourceResult("META-INF/MANIFEST.MF", bytes);
+        result.addProperty("modified", true);
+        return result;
+    }
+
+    private JsonObject exportClass(JsonObject arguments) throws Exception {
+        ClassNode classNode = findClass(requiredString(arguments, "class"));
+        Path requested = Path.of(requiredString(arguments, "path")).toAbsolutePath().normalize();
+        Path output = Files.isDirectory(requested) ? requested.resolve(classNode.name + ".class") : requested;
+        if (!output.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".class")) {
+            output = Path.of(output + ".class");
+        }
+        createParentDirectories(output);
+        byte[] bytes = context.getClassBytes(classNode);
+        Files.write(output, bytes);
+        JsonObject result = new JsonObject();
+        result.addProperty("class", classNode.name);
+        result.addProperty("path", output.toString());
+        result.addProperty("byteLength", bytes.length);
+        result.addProperty("exported", true);
+        return result;
+    }
+
+    private JsonObject exportPackage(JsonObject arguments) throws Exception {
+        String packageName = normalizePackageName(requiredString(arguments, "package"));
+        boolean includeSubpackages = optionalBoolean(arguments, "includeSubpackages", true);
+        List<ClassNode> matches = sortedClasses().stream()
+                .filter(classNode -> belongsToPackage(classNode.name, packageName, includeSubpackages))
+                .toList();
+        if (matches.isEmpty()) {
+            throw new IllegalArgumentException("No loaded classes found in package: " + packageName);
+        }
+        Path output = Path.of(requiredString(arguments, "path")).toAbsolutePath().normalize();
+        if (!output.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".jar")) {
+            output = Path.of(output + ".jar");
+        }
+        createParentDirectories(output);
+        try (JarOutputStream jar = new JarOutputStream(Files.newOutputStream(output))) {
+            for (ClassNode classNode : matches) {
+                jar.putNextEntry(new JarEntry(classNode.name + ".class"));
+                jar.write(context.getClassBytes(classNode));
+                jar.closeEntry();
+            }
+        }
+        JsonObject result = new JsonObject();
+        result.addProperty("package", packageName);
+        result.addProperty("path", output.toString());
+        result.addProperty("classCount", matches.size());
+        result.addProperty("includeSubpackages", includeSubpackages);
+        result.addProperty("exported", true);
         return result;
     }
 
@@ -2069,6 +2260,72 @@ final class McpTools {
         } catch (NumberFormatException exception) {
             throw new IllegalArgumentException("Invalid " + valueType + " value: " + value);
         }
+    }
+
+    private static byte[] decodeBase64(JsonObject arguments, String name, int maximumBytes) {
+        byte[] bytes;
+        try {
+            bytes = Base64.getDecoder().decode(requiredStringAllowEmpty(arguments, name));
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalArgumentException(name + " is not valid base64");
+        }
+        if (bytes.length > maximumBytes) {
+            throw new IllegalArgumentException(name + " exceeds " + maximumBytes + " decoded bytes");
+        }
+        return bytes;
+    }
+
+    private static JsonObject resourceResult(String path, byte[] bytes) {
+        JsonObject result = new JsonObject();
+        result.addProperty("path", path);
+        result.addProperty("byteLength", bytes.length);
+        return result;
+    }
+
+    private static String textPreview(byte[] bytes) {
+        int length = Math.min(bytes.length, 16 * 1024);
+        String text = new String(bytes, 0, length, StandardCharsets.UTF_8);
+        if (text.indexOf('\0') >= 0 || text.indexOf('\uFFFD') >= 0) {
+            return null;
+        }
+        int suspicious = 0;
+        for (int index = 0; index < text.length(); index++) {
+            char value = text.charAt(index);
+            if (Character.isISOControl(value) && value != '\n' && value != '\r' && value != '\t') {
+                suspicious++;
+            }
+        }
+        return suspicious > Math.max(2, text.length() / 100) ? null : text;
+    }
+
+    private static void createParentDirectories(Path output) throws Exception {
+        Path parent = output.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+    }
+
+    private static String normalizePackageName(String packageName) {
+        String normalized = packageName.trim().replace('.', '/');
+        while (normalized.startsWith("/")) {
+            normalized = normalized.substring(1);
+        }
+        while (normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        if (normalized.isEmpty() || normalized.contains("//") || normalized.contains(";")
+                || normalized.contains("[")) {
+            throw new IllegalArgumentException("Invalid package name: " + packageName);
+        }
+        return normalized;
+    }
+
+    private static boolean belongsToPackage(String className, String packageName, boolean includeSubpackages) {
+        int separator = className.lastIndexOf('/');
+        String actualPackage = separator < 0 ? "" : className.substring(0, separator);
+        return includeSubpackages
+                ? actualPackage.equals(packageName) || actualPackage.startsWith(packageName + "/")
+                : actualPackage.equals(packageName);
     }
 
     private static JsonObject pagedProperties() {

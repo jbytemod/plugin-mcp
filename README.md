@@ -24,6 +24,15 @@ An MCP server for [JByteMod Remastered](https://github.com/apkreader/JByteMod-Re
 | `redo_change` | Redo the latest undone MCP edit or transaction. |
 | `discard_changes` | Restore one class or every changed class to the clean baseline. |
 | `validate_hotswap` | Check changes against JVM class-redefinition restrictions before applying them. |
+| `list_resources` | Search and page through non-class entries in the active archive. |
+| `get_resource` | Read a paged byte range of an archive resource as Base64 with a text preview. |
+| `add_resource` | Add a non-class entry to the active archive. |
+| `replace_resource` | Replace an existing non-class archive entry. |
+| `delete_resource` | Delete a non-class entry from the active archive. |
+| `get_manifest` | Read `META-INF/MANIFEST.MF` as text. |
+| `edit_manifest` | Add or replace the manifest from UTF-8 text. |
+| `export_class` | Write one current class file to disk. |
+| `export_package` | Write a package and optionally its subpackages to a JAR. |
 | `list_classes` | Search and page through the classes in the active archive. |
 | `search_members` | Search fields and methods by class name, member name, or descriptor. |
 | `search_constants` | Search LDC constants throughout the active archive. |
@@ -85,6 +94,8 @@ Whole-class replacement is also supported through `get_class_file` and `replace_
 Changes are made to JByteMod's in-memory archive. They are not written to disk automatically. For an attached process, use `validate_hotswap` before `apply_changes`. Standard JVM redefinition restrictions still apply, so structural tools such as adding or removing fields or methods, changing inheritance, and renaming classes cannot normally be applied to an already loaded class. They remain useful for archives that will be saved to disk.
 
 Use `save_file` to write the current archive to disk or dump the classes loaded from an attached JVM into a JAR. Existing output files are overwritten.
+
+Resource tools operate on JAR and APK entries that are not class files. Large resources can be read in chunks with `offset` and `length`; writes accept Base64 and are limited to 32 MiB per entry. `export_class` and `export_package` write selected bytecode without saving the complete active archive.
 
 `set_attached_jvm_frozen` pauses the entire target process, including its UI and agent connection. Resume it before refreshing classes or applying changes. `terminate_attached_jvm` automatically resumes a frozen target before terminating it.
 
