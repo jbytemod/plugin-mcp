@@ -12,6 +12,8 @@ An MCP server for [JByteMod Remastered](https://github.com/apkreader/JByteMod-Re
 | `attach_jvm` | Attach JByteMod to a process by PID and load its runtime classes. |
 | `refresh_attached_jvm` | Reload classes from the attached JVM and discard unapplied in-memory edits. |
 | `apply_changes` | Redefine modified classes in the attached JVM. |
+| `set_attached_jvm_frozen` | Freeze or resume the entire attached JVM process. |
+| `terminate_attached_jvm` | Terminate the attached JVM while retaining its loaded classes as a local snapshot. |
 | `archive_summary` | Show the archive type, source, class/resource counts, and current selection. |
 | `list_classes` | Search and page through the classes in the active archive. |
 | `search_members` | Search fields and methods by class name, member name, or descriptor. |
@@ -53,6 +55,8 @@ Whole-class replacement is also supported through `get_class_file` and `replace_
 Changes are made to JByteMod's in-memory archive. They are not written to disk automatically. For an attached process, use `apply_changes` to redefine the modified classes in the target JVM. Standard JVM redefinition restrictions still apply, so fields, methods, inheritance, and other structural details cannot be added or removed.
 
 Use `save_file` to write the current archive to disk or dump the classes loaded from an attached JVM into a JAR. Existing output files are overwritten.
+
+`set_attached_jvm_frozen` pauses the entire target process, including its UI and agent connection. Resume it before refreshing classes or applying changes. `terminate_attached_jvm` automatically resumes a frozen target before terminating it.
 
 ## Installation
 

@@ -93,6 +93,15 @@ final class McpTools {
         tools.add(tool("apply_changes",
                 "Redefine modified classes in the attached JVM. JVM class-redefinition restrictions apply.",
                 schema(new JsonObject()), false, true, false));
+        JsonObject frozenProperties = new JsonObject();
+        frozenProperties.add("frozen", booleanProperty(
+                "True to freeze the attached JVM process; false to resume it."));
+        tools.add(tool("set_attached_jvm_frozen",
+                "Freeze or resume the entire attached JVM process.",
+                schema(frozenProperties, "frozen"), false, false, true));
+        tools.add(tool("terminate_attached_jvm",
+                "Immediately terminate the attached JVM process. Loaded classes remain available as a local snapshot.",
+                schema(new JsonObject()), false, true, false));
 
         tools.add(tool("archive_summary", "Show information about the archive currently open in JByteMod.",
                 schema(new JsonObject()), true, true));
@@ -235,6 +244,8 @@ final class McpTools {
                 case "attach_jvm" -> attachJvm(arguments);
                 case "refresh_attached_jvm" -> refreshAttachedJvm();
                 case "apply_changes" -> applyChanges();
+                case "set_attached_jvm_frozen" -> setAttachedJvmFrozen(arguments);
+                case "terminate_attached_jvm" -> terminateAttachedJvm();
                 case "archive_summary" -> archiveSummary();
                 case "list_classes" -> listClasses(arguments);
                 case "search_members" -> searchMembers(arguments);
@@ -319,6 +330,22 @@ final class McpTools {
         JsonObject result = new JsonObject();
         result.addProperty("changedClasses", changedClasses);
         result.addProperty("applied", true);
+        return result;
+    }
+
+    private JsonObject setAttachedJvmFrozen(JsonObject arguments) throws Exception {
+        boolean frozen = requiredBoolean(arguments, "frozen");
+        context.setAttachedJvmFrozen(frozen);
+        JsonObject result = new JsonObject();
+        result.addProperty("frozen", frozen);
+        return result;
+    }
+
+    private JsonObject terminateAttachedJvm() throws Exception {
+        context.terminateAttachedJvm();
+        JsonObject result = new JsonObject();
+        result.addProperty("terminated", true);
+        result.addProperty("snapshotAvailable", true);
         return result;
     }
 
@@ -1394,6 +1421,14 @@ final class McpTools {
             throw new IllegalArgumentException("Missing required integer: " + name);
         }
         return optionalInt(object, name, 0, minimum, maximum);
+    }
+
+    private static boolean requiredBoolean(JsonObject object, String name) {
+        if (object == null || !object.has(name) || !object.get(name).isJsonPrimitive()
+                || !object.get(name).getAsJsonPrimitive().isBoolean()) {
+            throw new IllegalArgumentException("Missing required boolean: " + name);
+        }
+        return object.get(name).getAsBoolean();
     }
 
     private static boolean optionalBoolean(JsonObject object, String name, boolean defaultValue) {
