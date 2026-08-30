@@ -4,17 +4,26 @@ An MCP server for [JByteMod Remastered](https://github.com/apkreader/JByteMod-Re
 
 ## Supported tools
 
+### Files and JVM attachment
+
 | Tool | Description |
 | --- | --- |
+| `archive_summary` | Show the archive type, source, class/resource counts, and current selection. |
 | `open_file` | Open a local JAR, class, or APK in the current JByteMod window. |
 | `save_file` | Save the active archive, class, or attached-JVM class dump to a local file. |
+| `export_class` | Write one current class file to disk. |
+| `export_package` | Write a package and optionally its subpackages to a JAR. |
 | `list_jvms` | List running local JVM processes that are available for attachment. |
 | `attach_jvm` | Attach JByteMod to a process by PID and load its runtime classes. |
 | `refresh_attached_jvm` | Reload classes from the attached JVM and discard unapplied in-memory edits. |
 | `apply_changes` | Redefine modified classes in the attached JVM. |
 | `set_attached_jvm_frozen` | Freeze or resume the entire attached JVM process. |
 | `terminate_attached_jvm` | Terminate the attached JVM while retaining its loaded classes as a local snapshot. |
-| `archive_summary` | Show the archive type, source, class/resource counts, and current selection. |
+
+### Change tracking and safety
+
+| Tool | Description |
+| --- | --- |
 | `list_changes` | List classes changed since the current clean baseline. |
 | `diff_class` | Compare a class with its original bytecode and structural schema. |
 | `begin_transaction` | Group several MCP edits into one undoable transaction. |
@@ -24,6 +33,11 @@ An MCP server for [JByteMod Remastered](https://github.com/apkreader/JByteMod-Re
 | `redo_change` | Redo the latest undone MCP edit or transaction. |
 | `discard_changes` | Restore one class or every changed class to the clean baseline. |
 | `validate_hotswap` | Check changes against JVM class-redefinition restrictions before applying them. |
+
+### Archive resources and manifest
+
+| Tool | Description |
+| --- | --- |
 | `list_resources` | Search and page through non-class entries in the active archive. |
 | `get_resource` | Read a paged byte range of an archive resource as Base64 with a text preview. |
 | `add_resource` | Add a non-class entry to the active archive. |
@@ -31,15 +45,28 @@ An MCP server for [JByteMod Remastered](https://github.com/apkreader/JByteMod-Re
 | `delete_resource` | Delete a non-class entry from the active archive. |
 | `get_manifest` | Read `META-INF/MANIFEST.MF` as text. |
 | `edit_manifest` | Add or replace the manifest from UTF-8 text. |
-| `export_class` | Write one current class file to disk. |
-| `export_package` | Write a package and optionally its subpackages to a JAR. |
+
+### Discovery and navigation
+
+| Tool | Description |
+| --- | --- |
 | `list_classes` | Search and page through the classes in the active archive. |
 | `search_members` | Search fields and methods by class name, member name, or descriptor. |
 | `search_constants` | Search LDC constants throughout the active archive. |
 | `find_references` | Find bytecode references to classes, fields, and methods. |
 | `describe_class` | Show class metadata, interfaces, fields, and method signatures. |
 | `class_hierarchy` | Show loaded ancestors and direct or transitive subtypes. |
-| `verify_class` | Validate class structure and method data flow with ASM. |
+| `method_calls` | Find incoming and outgoing calls for a method. |
+| `find_overrides` | Find loaded ancestor declarations and overriding methods. |
+| `find_implementations` | Find concrete implementations of a class or interface and resolve methods. |
+| `find_entry_points` | Find main, Java-agent, and JavaFX entry points. |
+| `select_class` | Select a class in the JByteMod UI. |
+| `select_method` | Select a method in the JByteMod UI. |
+
+### Class and member editing
+
+| Tool | Description |
+| --- | --- |
 | `get_class_file` | Export the current bytes of a class as Base64. |
 | `replace_class` | Replace a class in memory using a Base64-encoded class file. |
 | `rename_class` | Rename a class and update references and descriptors throughout the loaded archive. |
@@ -53,26 +80,26 @@ An MCP server for [JByteMod Remastered](https://github.com/apkreader/JByteMod-Re
 | `copy_method` | Copy a complete method between loaded classes. |
 | `replace_method_body` | Replace a method body with another loaded method that has the same descriptor. |
 | `edit_class_metadata` | Change a class's superclass, interfaces, signature, or source-file metadata. |
-| `get_method_bytecode` | Render a method as readable JVM bytecode. |
-| `method_calls` | Find incoming and outgoing calls for a method. |
-| `decompile_class` | Decompile a class with any available JByteMod decompiler. |
-| `decompile_method` | Decompile an individual method when supported by the selected decompiler. |
 | `list_instructions` | Return structured ASM instructions and their current indices. |
 | `edit_instruction` | Replace, insert, or remove an instruction. |
 | `list_constants` | List the LDC constants in a method. |
 | `replace_constant` | Replace a string, number, or type constant. |
+
+### Analysis and decompilation
+
+| Tool | Description |
+| --- | --- |
+| `verify_class` | Validate class structure and method data flow with ASM. |
+| `get_method_bytecode` | Render a method as readable JVM bytecode. |
 | `get_control_flow_graph` | Return normal and exception control-flow edges for a method. |
 | `find_dead_code` | Find unreachable instructions using ASM data-flow analysis. |
 | `analyze_stack_frames` | Show inferred local and operand-stack values at each instruction. |
-| `find_overrides` | Find loaded ancestor declarations and overriding methods. |
-| `find_implementations` | Find concrete implementations of a class or interface and resolve methods. |
-| `find_entry_points` | Find main, Java-agent, and JavaFX entry points. |
 | `search_instruction_pattern` | Search for contiguous opcode sequences across loaded methods. |
 | `detect_reflection_usage` | Find reflection, method-handle, proxy, Unsafe, and invokedynamic usage. |
 | `detect_native_methods` | Find methods declared with `ACC_NATIVE`. |
 | `compare_classes` | Compare metadata, fields, methods, and current bytecode for two classes. |
-| `select_class` | Select a class in the JByteMod UI. |
-| `select_method` | Select a method in the JByteMod UI. |
+| `decompile_class` | Decompile a class with any available JByteMod decompiler. |
+| `decompile_method` | Decompile an individual method when supported by the selected decompiler. |
 
 ### Decompilers
 
