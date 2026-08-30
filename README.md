@@ -8,10 +8,16 @@ An MCP server for [JByteMod Remastered](https://github.com/apkreader/JByteMod-Re
 | --- | --- |
 | `archive_summary` | Show the archive type, source, class/resource counts, and current selection. |
 | `list_classes` | Search and page through the classes in the active archive. |
+| `search_members` | Search fields and methods by class name, member name, or descriptor. |
+| `search_constants` | Search LDC constants throughout the active archive. |
+| `find_references` | Find bytecode references to classes, fields, and methods. |
 | `describe_class` | Show class metadata, interfaces, fields, and method signatures. |
+| `class_hierarchy` | Show loaded ancestors and direct or transitive subtypes. |
+| `verify_class` | Validate class structure and method data flow with ASM. |
 | `get_class_file` | Export the current bytes of a class as Base64. |
 | `replace_class` | Replace a class in memory using a Base64-encoded class file. |
 | `get_method_bytecode` | Render a method as readable JVM bytecode. |
+| `method_calls` | Find incoming and outgoing calls for a method. |
 | `decompile_class` | Decompile a class with any available JByteMod decompiler. |
 | `decompile_method` | Decompile an individual method when supported by the selected decompiler. |
 | `list_instructions` | Return structured ASM instructions and their current indices. |
