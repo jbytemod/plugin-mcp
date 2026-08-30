@@ -31,16 +31,18 @@ final class McpServer implements Closeable {
     private final HttpServer httpServer;
     private final ExecutorService executor;
     private final McpTools tools;
+    private final McpActivityLog activityLog;
     private final String endpoint;
     private volatile boolean running;
 
-    McpServer(PluginContext context, int port) throws IOException {
+    McpServer(PluginContext context, int port, McpActivityLog activityLog) throws IOException {
         InetSocketAddress address = new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port);
         this.httpServer = HttpServer.create(address, 0);
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
         this.httpServer.createContext("/mcp", this::handle);
         this.httpServer.setExecutor(executor);
         this.tools = new McpTools(context);
+        this.activityLog = activityLog;
         this.endpoint = "http://127.0.0.1:" + httpServer.getAddress().getPort() + "/mcp";
     }
 
@@ -113,12 +115,18 @@ final class McpServer implements Closeable {
                 return;
             }
 
+            String client = observeClient(exchange, request);
+            String toolName = toolName(request, method);
+            String action = toolName == null ? method : "Tool: " + toolName;
+            long started = System.nanoTime();
             boolean modern = isModernRequest(exchange, request);
             if (modern && !validModernHeaders(exchange, request, method)) {
+                record(client, action, "Rejected", started);
                 sendJson(exchange, 400, error(id, -32020, "MCP routing headers do not match the request"));
                 return;
             }
             if (id == null || id.isJsonNull()) {
+                record(client, action, "Accepted", started);
                 exchange.sendResponseHeaders(202, -1);
                 return;
             }
@@ -129,23 +137,49 @@ final class McpServer implements Closeable {
                 result = dispatch(request, method, modern);
             } catch (UnknownMethodException exception) {
                 status = modern ? 404 : 200;
+                record(client, action, "Unknown", started);
                 sendJson(exchange, status, error(id, -32601, "Method not found: " + method));
                 return;
             } catch (IllegalArgumentException exception) {
+                record(client, action, "Invalid", started);
                 sendJson(exchange, 200, error(id, -32602, exception.getMessage()));
                 return;
             } catch (Throwable throwable) {
+                record(client, action, "Error", started);
                 sendJson(exchange, 200, error(id, -32603, throwable.getMessage() == null
                         ? throwable.getClass().getSimpleName() : throwable.getMessage()));
                 return;
             }
 
+            boolean toolError = toolName != null && result.has("isError") && result.get("isError").getAsBoolean();
+            record(client, action, toolError ? "Error" : "OK", started);
+            if (toolName != null && !toolError) {
+                activityLog.toolSucceeded(toolName);
+            }
             if (modern) {
                 result.addProperty("resultType", "complete");
                 addServerInfo(result);
             }
             sendJson(exchange, status, response(id, result));
         }
+    }
+
+    private String observeClient(HttpExchange exchange, JsonObject request) {
+        String userAgent = exchange.getRequestHeaders().getFirst("User-Agent");
+        String fallback = userAgent == null || userAgent.isBlank() ? "Local client" : userAgent;
+        String key = userAgent == null || userAgent.isBlank()
+                ? String.valueOf(exchange.getRemoteAddress()) : userAgent;
+        JsonObject clientInfo = object(object(request, "params"), "clientInfo");
+        return activityLog.observeClient(key, fallback, string(clientInfo, "name"), string(clientInfo, "version"));
+    }
+
+    private static String toolName(JsonObject request, String method) {
+        return "tools/call".equals(method) ? string(object(request, "params"), "name") : null;
+    }
+
+    private void record(String client, String action, String result, long started) {
+        long durationMillis = Math.max(0, (System.nanoTime() - started) / 1_000_000);
+        activityLog.record(client, action, result, durationMillis);
     }
 
     private JsonObject dispatch(JsonObject request, String method, boolean modern) throws Exception {

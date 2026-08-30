@@ -3,18 +3,11 @@ package de.xbrowniecodez.jbytemod.mcp;
 import de.xbrowniecodez.jbytemod.plugin.Plugin;
 import org.objectweb.asm.tree.ClassNode;
 
-import javax.swing.JCheckBox;
-import javax.swing.JLabel;
-import javax.swing.JOptionPane;
-import javax.swing.JPanel;
-import javax.swing.JSpinner;
-import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingUtilities;
-import java.awt.GridBagConstraints;
-import java.awt.GridBagLayout;
-import java.awt.Insets;
+import java.awt.Window;
 import java.net.BindException;
 import java.util.Map;
+import java.util.prefs.BackingStoreException;
 import java.util.prefs.Preferences;
 
 public final class McpPlugin extends Plugin {
@@ -25,7 +18,9 @@ public final class McpPlugin extends Plugin {
     private static final int PORT_SEARCH_LIMIT = 100;
     private static final Preferences PREFERENCES = Preferences.userNodeForPackage(McpPlugin.class);
 
+    private final McpActivityLog activityLog = new McpActivityLog();
     private McpServer server;
+    private McpActivityDialog activityDialog;
     private int port;
     private boolean enabled;
 
@@ -58,51 +53,28 @@ public final class McpPlugin extends Plugin {
 
     @Override
     public void menuClick() {
-        boolean running = server != null && server.isRunning();
-        JSpinner portInput = new JSpinner(new SpinnerNumberModel(port, 1, 65535, 1));
-        JSpinner.NumberEditor portEditor = new JSpinner.NumberEditor(portInput, "#");
-        portEditor.getTextField().setColumns(6);
-        portInput.setEditor(portEditor);
-        JCheckBox enabledInput = new JCheckBox("Run MCP server", enabled);
-
-        JPanel panel = new JPanel(new GridBagLayout());
-        GridBagConstraints constraints = new GridBagConstraints();
-        constraints.anchor = GridBagConstraints.WEST;
-        constraints.gridx = 0;
-        constraints.gridy = 0;
-        constraints.gridwidth = 2;
-        constraints.insets = new Insets(0, 0, 10, 0);
-        panel.add(new JLabel(running ? "Running at " + server.getEndpoint() : "Server is stopped"), constraints);
-
-        constraints.gridy = 1;
-        constraints.gridwidth = 1;
-        constraints.insets = new Insets(0, 0, 8, 8);
-        panel.add(new JLabel("Preferred port:"), constraints);
-
-        constraints.gridx = 1;
-        constraints.insets = new Insets(0, 0, 8, 0);
-        constraints.fill = GridBagConstraints.HORIZONTAL;
-        constraints.weightx = 1;
-        panel.add(portInput, constraints);
-
-        constraints.gridx = 0;
-        constraints.gridy = 2;
-        constraints.gridwidth = 2;
-        constraints.insets = new Insets(0, 0, 0, 0);
-        constraints.fill = GridBagConstraints.NONE;
-        constraints.weightx = 0;
-        panel.add(enabledInput, constraints);
-
-        int choice = JOptionPane.showConfirmDialog(
-                SwingUtilities.getWindowAncestor(getMenu()), panel, "MCP Server",
-                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-        if (choice != JOptionPane.OK_OPTION) {
+        if (activityDialog != null && activityDialog.isDisplayable()) {
+            activityDialog.setVisible(true);
+            activityDialog.toFront();
             return;
         }
+        Window owner = SwingUtilities.getWindowAncestor(getMenu());
+        activityDialog = new McpActivityDialog(owner, this);
+        activityDialog.setVisible(true);
+    }
 
-        int newPort = (int) portInput.getValue();
-        boolean newEnabled = enabledInput.isSelected();
-        if (running && (!newEnabled || newPort != port)) {
+    @Override
+    public void shutdown() {
+        if (activityDialog != null) {
+            activityDialog.dispose();
+            activityDialog = null;
+        }
+        stopServer();
+    }
+
+    void configureServer(int newPort, boolean newEnabled, boolean forceRestart) {
+        boolean running = isServerRunning();
+        if (running && (!newEnabled || newPort != port || forceRestart)) {
             stopServer();
         }
 
@@ -110,15 +82,35 @@ public final class McpPlugin extends Plugin {
         enabled = newEnabled;
         PREFERENCES.putInt(PORT_PREFERENCE, port);
         PREFERENCES.putBoolean(ENABLED_PREFERENCE, enabled);
+        try {
+            PREFERENCES.flush();
+        } catch (BackingStoreException exception) {
+            getContext().logError("Could not save MCP server settings", exception);
+        }
 
-        if (enabled && (server == null || !server.isRunning())) {
+        if (enabled && !isServerRunning()) {
             startServer();
         }
     }
 
-    @Override
-    public void shutdown() {
-        stopServer();
+    boolean isServerRunning() {
+        return server != null && server.isRunning();
+    }
+
+    boolean isServerEnabled() {
+        return enabled;
+    }
+
+    int getPreferredPort() {
+        return port;
+    }
+
+    String getServerEndpoint() {
+        return isServerRunning() ? server.getEndpoint() : "";
+    }
+
+    McpActivityLog getActivityLog() {
+        return activityLog;
     }
 
     private void startServer() {
@@ -128,6 +120,7 @@ public final class McpPlugin extends Plugin {
         try {
             server = bindServer();
             server.start();
+            activityLog.record("JByteMod", "Server started", "OK", 0);
             getContext().log("MCP server listening at " + server.getEndpoint());
         } catch (Exception exception) {
             server = null;
@@ -139,7 +132,7 @@ public final class McpPlugin extends Plugin {
         int lastSequentialPort = Math.min(65535, port + PORT_SEARCH_LIMIT - 1);
         for (int candidate = port; candidate <= lastSequentialPort; candidate++) {
             try {
-                McpServer candidateServer = new McpServer(getContext(), candidate);
+                McpServer candidateServer = new McpServer(getContext(), candidate, activityLog);
                 if (candidate != port) {
                     getContext().log("MCP port " + port + " is in use; using " + candidate + " instead");
                 }
@@ -148,7 +141,7 @@ public final class McpPlugin extends Plugin {
             }
         }
 
-        McpServer candidateServer = new McpServer(getContext(), 0);
+        McpServer candidateServer = new McpServer(getContext(), 0, activityLog);
         getContext().log("No free MCP port found near " + port + "; using "
                 + candidateServer.getPort() + " instead");
         return candidateServer;
@@ -160,6 +153,7 @@ public final class McpPlugin extends Plugin {
         }
         server.close();
         server = null;
+        activityLog.record("JByteMod", "Server stopped", "OK", 0);
         getContext().log("MCP server stopped");
     }
 

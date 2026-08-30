@@ -68,6 +68,17 @@ Download the plugin JAR from the [releases page](https://github.com/jbytemod/plu
 
 Restart JByteMod after copying the plugin. The plugin will appear as **MCP Server** in the plugin menu.
 
+## Activity dashboard
+
+Open **Plugins > MCP Server** to view the live MCP activity dashboard. It shows:
+
+- Whether the server is running and its current endpoint.
+- Recent MCP requests and tool calls, including their client, result, and duration.
+- MCP clients observed by the server, their reported version, last activity, and request count.
+- The number of successful MCP bytecode edits made since the archive was opened, saved, refreshed, attached, or applied.
+
+The dashboard also provides controls for starting or stopping the server, changing its preferred port, and clearing the activity history. It is modeless, so it can remain open while working in JByteMod.
+
 ## Connecting
 
 The server starts with JByteMod and listens at:
@@ -90,7 +101,7 @@ Add that URL as an HTTP MCP server in your client. For clients using JSON config
 
 The exact configuration format depends on the MCP client. The server only accepts connections from the local machine.
 
-The preferred port and server state can be changed from **Plugins > MCP Server**. The settings are kept across restarts. If the preferred port is already used by another JByteMod instance, the plugin automatically uses the next available port and shows the actual endpoint in this dialog and the log.
+The preferred port and server state can be changed from the activity dashboard. The settings are kept across restarts. If the preferred port is already used by another JByteMod instance, the plugin automatically uses the next available port and shows the actual endpoint in the dashboard and the log.
 
 To override the saved port at launch, use:
 
