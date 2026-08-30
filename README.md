@@ -6,6 +6,7 @@ An MCP server for [JByteMod Remastered](https://github.com/apkreader/JByteMod-Re
 
 | Tool | Description |
 | --- | --- |
+| `open_file` | Open a local JAR, class, or APK in the current JByteMod window. |
 | `list_jvms` | List running local JVM processes that are available for attachment. |
 | `attach_jvm` | Attach JByteMod to a process by PID and load its runtime classes. |
 | `refresh_attached_jvm` | Reload classes from the attached JVM and discard unapplied in-memory edits. |

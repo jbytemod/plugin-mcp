@@ -68,6 +68,12 @@ final class McpTools {
     JsonObject list(boolean modern) {
         JsonObject result = new JsonObject();
         JsonArray tools = new JsonArray();
+        JsonObject openFileProperties = new JsonObject();
+        openFileProperties.add("path", stringProperty("Absolute or working-directory-relative path to a JAR, class, or APK file."));
+        tools.add(tool("open_file",
+                "Open a local JAR, class, or APK in JByteMod. This replaces the current archive.",
+                schema(openFileProperties, "path"), false, true, true));
+
         tools.add(tool("list_jvms", "List local JVM processes that JByteMod can attach to.",
                 schema(new JsonObject()), true, true));
 
@@ -217,6 +223,7 @@ final class McpTools {
                 ? params.getAsJsonObject("arguments") : new JsonObject();
         try {
             JsonElement output = switch (name) {
+                case "open_file" -> openFile(arguments);
                 case "list_jvms" -> listJvms();
                 case "attach_jvm" -> attachJvm(arguments);
                 case "refresh_attached_jvm" -> refreshAttachedJvm();
@@ -250,6 +257,15 @@ final class McpTools {
             String message = exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
             return toolResult(new com.google.gson.JsonPrimitive(message), true);
         }
+    }
+
+    private JsonObject openFile(JsonObject arguments) throws Exception {
+        String path = requiredString(arguments, "path");
+        context.openFile(path);
+        JsonObject result = archiveSummary();
+        result.addProperty("path", path);
+        result.addProperty("opened", true);
+        return result;
     }
 
     private JsonObject listJvms() {
