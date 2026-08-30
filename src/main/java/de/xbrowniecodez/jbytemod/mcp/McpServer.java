@@ -35,13 +35,13 @@ final class McpServer implements Closeable {
     private final String endpoint;
     private volatile boolean running;
 
-    McpServer(PluginContext context, int port, McpActivityLog activityLog) throws IOException {
+    McpServer(PluginContext context, int port, McpActivityLog activityLog, McpWorkspace workspace) throws IOException {
         InetSocketAddress address = new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port);
         this.httpServer = HttpServer.create(address, 0);
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
         this.httpServer.createContext("/mcp", this::handle);
         this.httpServer.setExecutor(executor);
-        this.tools = new McpTools(context);
+        this.tools = new McpTools(context, workspace);
         this.activityLog = activityLog;
         this.endpoint = "http://127.0.0.1:" + httpServer.getAddress().getPort() + "/mcp";
     }
@@ -153,9 +153,6 @@ final class McpServer implements Closeable {
 
             boolean toolError = toolName != null && result.has("isError") && result.get("isError").getAsBoolean();
             record(client, action, toolError ? "Error" : "OK", started);
-            if (toolName != null && !toolError) {
-                activityLog.toolSucceeded(toolName);
-            }
             if (modern) {
                 result.addProperty("resultType", "complete");
                 addServerInfo(result);

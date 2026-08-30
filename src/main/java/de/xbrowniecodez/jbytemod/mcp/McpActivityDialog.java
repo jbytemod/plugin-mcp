@@ -171,7 +171,7 @@ final class McpActivityDialog extends JDialog {
         boolean running = plugin.isServerRunning();
         statusValue.setText(running ? "Running" : "Stopped");
         endpointValue.setText(running ? plugin.getServerEndpoint() : "-");
-        editsValue.setText(Integer.toString(plugin.getActivityLog().pendingEdits()));
+        editsValue.setText(Integer.toString(plugin.getPendingEditCount()));
         runServer.setSelected(plugin.isServerEnabled());
 
         activityModel.setRowCount(0);

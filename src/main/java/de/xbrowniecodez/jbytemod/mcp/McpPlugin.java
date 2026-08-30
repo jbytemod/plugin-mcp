@@ -20,6 +20,7 @@ public final class McpPlugin extends Plugin {
 
     private final McpActivityLog activityLog = new McpActivityLog();
     private McpServer server;
+    private McpWorkspace workspace;
     private McpActivityDialog activityDialog;
     private int port;
     private boolean enabled;
@@ -37,6 +38,8 @@ public final class McpPlugin extends Plugin {
     public void init() {
         port = loadPort();
         enabled = PREFERENCES.getBoolean(ENABLED_PREFERENCE, true);
+        workspace = new McpWorkspace(getContext());
+        workspace.reset(getCurrentFile());
         if (enabled) {
             startServer();
         }
@@ -44,6 +47,9 @@ public final class McpPlugin extends Plugin {
 
     @Override
     public void loadFile(Map<String, ClassNode> map) {
+        if (workspace != null) {
+            workspace.reset(map);
+        }
     }
 
     @Override
@@ -113,6 +119,10 @@ public final class McpPlugin extends Plugin {
         return activityLog;
     }
 
+    int getPendingEditCount() {
+        return workspace == null ? 0 : workspace.changes().size();
+    }
+
     private void startServer() {
         if (server != null && server.isRunning()) {
             return;
@@ -132,7 +142,7 @@ public final class McpPlugin extends Plugin {
         int lastSequentialPort = Math.min(65535, port + PORT_SEARCH_LIMIT - 1);
         for (int candidate = port; candidate <= lastSequentialPort; candidate++) {
             try {
-                McpServer candidateServer = new McpServer(getContext(), candidate, activityLog);
+                McpServer candidateServer = new McpServer(getContext(), candidate, activityLog, workspace);
                 if (candidate != port) {
                     getContext().log("MCP port " + port + " is in use; using " + candidate + " instead");
                 }
@@ -141,7 +151,7 @@ public final class McpPlugin extends Plugin {
             }
         }
 
-        McpServer candidateServer = new McpServer(getContext(), 0, activityLog);
+        McpServer candidateServer = new McpServer(getContext(), 0, activityLog, workspace);
         getContext().log("No free MCP port found near " + port + "; using "
                 + candidateServer.getPort() + " instead");
         return candidateServer;

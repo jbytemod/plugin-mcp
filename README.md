@@ -15,6 +15,15 @@ An MCP server for [JByteMod Remastered](https://github.com/apkreader/JByteMod-Re
 | `set_attached_jvm_frozen` | Freeze or resume the entire attached JVM process. |
 | `terminate_attached_jvm` | Terminate the attached JVM while retaining its loaded classes as a local snapshot. |
 | `archive_summary` | Show the archive type, source, class/resource counts, and current selection. |
+| `list_changes` | List classes changed since the current clean baseline. |
+| `diff_class` | Compare a class with its original bytecode and structural schema. |
+| `begin_transaction` | Group several MCP edits into one undoable transaction. |
+| `commit_transaction` | Commit the active transaction to the undo history. |
+| `rollback_transaction` | Restore everything changed during the active transaction. |
+| `undo_change` | Undo the latest MCP edit or transaction. |
+| `redo_change` | Redo the latest undone MCP edit or transaction. |
+| `discard_changes` | Restore one class or every changed class to the clean baseline. |
+| `validate_hotswap` | Check changes against JVM class-redefinition restrictions before applying them. |
 | `list_classes` | Search and page through the classes in the active archive. |
 | `search_members` | Search fields and methods by class name, member name, or descriptor. |
 | `search_constants` | Search LDC constants throughout the active archive. |

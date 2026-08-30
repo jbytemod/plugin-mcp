@@ -7,18 +7,12 @@ import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 final class McpActivityLog {
     private static final int MAX_ACTIVITIES = 250;
-    private static final Set<String> EDIT_TOOLS = Set.of(
-            "replace_class", "edit_instruction", "replace_constant");
-    private static final Set<String> COMMIT_TOOLS = Set.of(
-            "open_file", "save_file", "attach_jvm", "refresh_attached_jvm", "apply_changes");
 
     private final Deque<Activity> activities = new ArrayDeque<>();
     private final Map<String, MutableClient> clients = new LinkedHashMap<>();
-    private int pendingEdits;
 
     synchronized String observeClient(String key, String fallbackName, String reportedName, String reportedVersion) {
         Instant now = Instant.now();
@@ -42,14 +36,6 @@ final class McpActivityLog {
         }
     }
 
-    synchronized void toolSucceeded(String toolName) {
-        if (EDIT_TOOLS.contains(toolName)) {
-            pendingEdits++;
-        } else if (COMMIT_TOOLS.contains(toolName)) {
-            pendingEdits = 0;
-        }
-    }
-
     synchronized List<Activity> activities() {
         return new ArrayList<>(activities);
     }
@@ -60,10 +46,6 @@ final class McpActivityLog {
             snapshot.add(new Client(client.name, client.version, client.lastSeen, client.requests));
         }
         return snapshot;
-    }
-
-    synchronized int pendingEdits() {
-        return pendingEdits;
     }
 
     synchronized void clearActivities() {

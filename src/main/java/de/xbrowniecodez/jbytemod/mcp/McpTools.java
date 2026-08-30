@@ -34,6 +34,7 @@ import org.objectweb.asm.tree.VarInsnNode;
 import org.objectweb.asm.util.Printer;
 import org.objectweb.asm.util.CheckClassAdapter;
 import org.objectweb.asm.util.Textifier;
+import org.objectweb.asm.util.TraceClassVisitor;
 import org.objectweb.asm.util.TraceMethodVisitor;
 
 import java.io.PrintWriter;
@@ -42,9 +43,11 @@ import java.util.ArrayList;
 import java.util.ArrayDeque;
 import java.util.Base64;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 final class McpTools {
@@ -55,10 +58,12 @@ final class McpTools {
     private static final int MAX_CLASS_FILE_BYTES = 8 * 1024 * 1024;
 
     private final PluginContext context;
+    private final McpWorkspace workspace;
     private final Object mutationLock = new Object();
 
-    McpTools(PluginContext context) {
+    McpTools(PluginContext context, McpWorkspace workspace) {
         this.context = context;
+        this.workspace = workspace;
     }
 
     String getVersion() {
@@ -105,6 +110,33 @@ final class McpTools {
 
         tools.add(tool("archive_summary", "Show information about the archive currently open in JByteMod.",
                 schema(new JsonObject()), true, true));
+
+        tools.add(tool("list_changes", "List classes changed since the archive was opened, saved, refreshed, or applied.",
+                schema(new JsonObject()), true, true));
+        JsonObject diffClassProperties = new JsonObject();
+        diffClassProperties.add("class", stringProperty("Changed JVM internal or dotted class name."));
+        tools.add(tool("diff_class", "Compare a class with its clean baseline and report bytecode and structural differences.",
+                schema(diffClassProperties, "class"), true, true));
+        JsonObject transactionProperties = new JsonObject();
+        transactionProperties.add("description", stringProperty("Optional description for the grouped changes."));
+        tools.add(tool("begin_transaction", "Begin grouping MCP bytecode edits into one undoable transaction.",
+                schema(transactionProperties), false, true, false));
+        tools.add(tool("commit_transaction", "Commit the active MCP transaction as one undo history entry.",
+                schema(new JsonObject()), false, true, false));
+        tools.add(tool("rollback_transaction", "Restore all classes changed by the active MCP transaction.",
+                schema(new JsonObject()), false, true, false));
+        tools.add(tool("undo_change", "Undo the most recent MCP edit or committed transaction.",
+                schema(new JsonObject()), false, true, false));
+        tools.add(tool("redo_change", "Redo the most recently undone MCP edit or transaction.",
+                schema(new JsonObject()), false, true, false));
+        JsonObject discardProperties = new JsonObject();
+        discardProperties.add("class", stringProperty("Optional class to restore. Omit to restore every changed class."));
+        tools.add(tool("discard_changes", "Restore one class or all classes to the clean baseline.",
+                schema(discardProperties), false, true, false));
+        JsonObject hotSwapProperties = new JsonObject();
+        hotSwapProperties.add("class", stringProperty("Optional changed class to validate. Omit to validate all changes."));
+        tools.add(tool("validate_hotswap", "Check changes against standard JVM class-redefinition restrictions.",
+                schema(hotSwapProperties), true, true));
 
         JsonObject listClassProperties = new JsonObject();
         listClassProperties.add("query", stringProperty("Optional case-insensitive class name filter."));
@@ -247,6 +279,15 @@ final class McpTools {
                 case "set_attached_jvm_frozen" -> setAttachedJvmFrozen(arguments);
                 case "terminate_attached_jvm" -> terminateAttachedJvm();
                 case "archive_summary" -> archiveSummary();
+                case "list_changes" -> listChanges();
+                case "diff_class" -> diffClass(arguments);
+                case "begin_transaction" -> beginTransaction(arguments);
+                case "commit_transaction" -> historyResult(workspace.commitTransaction());
+                case "rollback_transaction" -> historyResult(workspace.rollbackTransaction());
+                case "undo_change" -> historyResult(workspace.undo());
+                case "redo_change" -> historyResult(workspace.redo());
+                case "discard_changes" -> discardChanges(arguments);
+                case "validate_hotswap" -> validateHotSwap(arguments);
                 case "list_classes" -> listClasses(arguments);
                 case "search_members" -> searchMembers(arguments);
                 case "search_constants" -> searchConstants(arguments);
@@ -280,6 +321,7 @@ final class McpTools {
     private JsonObject openFile(JsonObject arguments) throws Exception {
         String path = requiredString(arguments, "path");
         context.openFile(path);
+        workspace.reset(context.getCurrentFile());
         JsonObject result = archiveSummary();
         result.addProperty("path", path);
         result.addProperty("opened", true);
@@ -288,6 +330,7 @@ final class McpTools {
 
     private JsonObject saveFile(JsonObject arguments) throws Exception {
         String outputPath = context.saveFile(requiredString(arguments, "path"));
+        workspace.markClean(context.getCurrentFile());
         JsonObject result = new JsonObject();
         result.addProperty("path", outputPath);
         result.addProperty("saved", true);
@@ -312,6 +355,7 @@ final class McpTools {
     private JsonObject attachJvm(JsonObject arguments) throws Exception {
         String pid = requiredString(arguments, "pid");
         context.attachToJvm(pid);
+        workspace.reset(context.getCurrentFile());
         JsonObject result = archiveSummary();
         result.addProperty("pid", pid);
         result.addProperty("attached", true);
@@ -320,6 +364,7 @@ final class McpTools {
 
     private JsonObject refreshAttachedJvm() throws Exception {
         context.refreshAttachedJvm();
+        workspace.reset(context.getCurrentFile());
         JsonObject result = archiveSummary();
         result.addProperty("refreshed", true);
         return result;
@@ -327,6 +372,7 @@ final class McpTools {
 
     private JsonObject applyChanges() throws Exception {
         int changedClasses = context.applyChangesToAttachedJvm();
+        workspace.markClean(context.getCurrentFile());
         JsonObject result = new JsonObject();
         result.addProperty("changedClasses", changedClasses);
         result.addProperty("applied", true);
@@ -369,6 +415,172 @@ final class McpTools {
             result.addProperty("selectedMethod", context.getSelectedMethod().name + context.getSelectedMethod().desc);
         }
         return result;
+    }
+
+    private JsonObject listChanges() {
+        List<McpWorkspace.ChangeInfo> changes = workspace.changes();
+        JsonArray items = new JsonArray();
+        for (McpWorkspace.ChangeInfo change : changes) {
+            JsonObject item = new JsonObject();
+            item.addProperty("class", change.className());
+            item.addProperty("kind", change.kind());
+            addNullable(item, "originalSha256", change.originalSha256());
+            addNullable(item, "currentSha256", change.currentSha256());
+            items.add(item);
+        }
+        JsonObject result = new JsonObject();
+        result.addProperty("total", changes.size());
+        result.addProperty("transactionActive", workspace.transactionActive());
+        result.addProperty("undoCount", workspace.undoCount());
+        result.addProperty("redoCount", workspace.redoCount());
+        result.add("changes", items);
+        return result;
+    }
+
+    private JsonObject diffClass(JsonObject arguments) {
+        String className = requiredString(arguments, "class").replace('.', '/');
+        byte[] originalBytes = workspace.originalBytes(className);
+        ClassNode current = classes().get(className);
+        if (originalBytes == null && current == null) {
+            throw new IllegalArgumentException("Class not found in the current or original archive: " + className);
+        }
+        ClassNode original = originalBytes == null ? null : context.readClass(originalBytes);
+        byte[] currentBytes = current == null ? null : context.getClassBytes(current);
+        List<String> issues = hotSwapIssues(original, current);
+
+        JsonObject result = new JsonObject();
+        result.addProperty("class", className);
+        result.addProperty("kind", original == null ? "added" : current == null ? "removed"
+                : java.util.Arrays.equals(originalBytes, currentBytes) ? "unchanged" : "modified");
+        result.addProperty("hotSwapCompatible", issues.isEmpty());
+        result.add("structuralChanges", GSON.toJsonTree(issues));
+        if (original != null) {
+            result.addProperty("originalByteLength", originalBytes.length);
+            result.addProperty("originalBytecode", limit(classText(original)));
+        }
+        if (current != null) {
+            result.addProperty("currentByteLength", currentBytes.length);
+            result.addProperty("currentBytecode", limit(classText(current)));
+        }
+        return result;
+    }
+
+    private JsonObject beginTransaction(JsonObject arguments) {
+        String description = optionalString(arguments, "description", "MCP transaction");
+        workspace.beginTransaction(description);
+        JsonObject result = new JsonObject();
+        result.addProperty("active", true);
+        result.addProperty("description", description);
+        return result;
+    }
+
+    private JsonObject discardChanges(JsonObject arguments) throws Exception {
+        String className = optionalString(arguments, "class", "").replace('.', '/');
+        return historyResult(workspace.discard(className.isBlank() ? Set.of() : Set.of(className)));
+    }
+
+    private JsonObject validateHotSwap(JsonObject arguments) {
+        String requestedClass = optionalString(arguments, "class", "").replace('.', '/');
+        Set<String> names = new LinkedHashSet<>();
+        if (!requestedClass.isBlank()) {
+            names.add(requestedClass);
+        } else {
+            for (McpWorkspace.ChangeInfo change : workspace.changes()) {
+                names.add(change.className());
+            }
+        }
+
+        boolean compatible = true;
+        JsonArray checkedClasses = new JsonArray();
+        for (String name : names) {
+            byte[] originalBytes = workspace.originalBytes(name);
+            ClassNode original = originalBytes == null ? null : context.readClass(originalBytes);
+            ClassNode current = classes().get(name);
+            if (original == null && current == null) {
+                throw new IllegalArgumentException("Class not found in the current or original archive: " + name);
+            }
+            List<String> issues = hotSwapIssues(original, current);
+            compatible &= issues.isEmpty();
+            JsonObject item = new JsonObject();
+            item.addProperty("class", name);
+            item.addProperty("compatible", issues.isEmpty());
+            item.add("issues", GSON.toJsonTree(issues));
+            checkedClasses.add(item);
+        }
+
+        JsonObject result = new JsonObject();
+        result.addProperty("compatible", compatible);
+        result.addProperty("checkedClassCount", names.size());
+        result.add("classes", checkedClasses);
+        return result;
+    }
+
+    private static JsonObject historyResult(McpWorkspace.HistoryResult history) {
+        JsonObject result = new JsonObject();
+        result.addProperty("description", history.description());
+        result.addProperty("classCount", history.classCount());
+        result.addProperty("undoCount", history.undoCount());
+        result.addProperty("redoCount", history.redoCount());
+        return result;
+    }
+
+    private static List<String> hotSwapIssues(ClassNode original, ClassNode current) {
+        List<String> issues = new ArrayList<>();
+        if (original == null) {
+            issues.add("Class was added");
+            return issues;
+        }
+        if (current == null) {
+            issues.add("Class was removed");
+            return issues;
+        }
+        if (!original.name.equals(current.name)) issues.add("Class name changed");
+        if (original.version != current.version) issues.add("Class-file version changed");
+        if (original.access != current.access) issues.add("Class access flags changed");
+        if (!Objects.equals(original.superName, current.superName)) issues.add("Superclass changed");
+        if (!new HashSet<>(original.interfaces).equals(new HashSet<>(current.interfaces))) {
+            issues.add("Implemented interfaces changed");
+        }
+        if (!fieldSchema(original).equals(fieldSchema(current))) issues.add("Field schema changed");
+        if (!methodSchema(original).equals(methodSchema(current))) issues.add("Method schema changed");
+        if (!Objects.equals(original.nestHostClass, current.nestHostClass)
+                || !new HashSet<>(orEmpty(original.nestMembers)).equals(new HashSet<>(orEmpty(current.nestMembers)))) {
+            issues.add("Nest membership changed");
+        }
+        if (!new HashSet<>(orEmpty(original.permittedSubclasses))
+                .equals(new HashSet<>(orEmpty(current.permittedSubclasses)))) {
+            issues.add("Permitted subclasses changed");
+        }
+        List<String> originalRecords = original.recordComponents == null ? List.of()
+                : original.recordComponents.stream().map(component -> component.name + component.descriptor).sorted().toList();
+        List<String> currentRecords = current.recordComponents == null ? List.of()
+                : current.recordComponents.stream().map(component -> component.name + component.descriptor).sorted().toList();
+        if (!originalRecords.equals(currentRecords)) issues.add("Record components changed");
+        return issues;
+    }
+
+    private static List<String> fieldSchema(ClassNode classNode) {
+        return classNode.fields.stream()
+                .map(field -> field.name + " " + field.desc + " " + field.access)
+                .sorted().toList();
+    }
+
+    private static List<String> methodSchema(ClassNode classNode) {
+        return classNode.methods.stream()
+                .map(method -> method.name + method.desc + " " + method.access)
+                .sorted().toList();
+    }
+
+    private static <T> List<T> orEmpty(List<T> values) {
+        return values == null ? List.of() : values;
+    }
+
+    private static String classText(ClassNode classNode) {
+        StringWriter output = new StringWriter();
+        PrintWriter writer = new PrintWriter(output);
+        classNode.accept(new TraceClassVisitor(null, new Textifier(), writer));
+        writer.flush();
+        return output.toString();
     }
 
     private JsonObject listClasses(JsonObject arguments) {
@@ -644,7 +856,7 @@ final class McpTools {
                 context.getClassBytes(classNode)));
     }
 
-    private JsonObject replaceClass(JsonObject arguments) {
+    private JsonObject replaceClass(JsonObject arguments) throws Exception {
         String className = requiredString(arguments, "class").replace('.', '/');
         ClassNode previous = findClass(className);
         byte[] bytes;
@@ -668,9 +880,12 @@ final class McpTools {
                     + " does not match " + className);
         }
 
-        synchronized (mutationLock) {
-            context.replaceClass(previous, replacement);
-        }
+        workspace.mutate("Replace class " + className, Set.of(className), () -> {
+            synchronized (mutationLock) {
+                context.replaceClass(previous, replacement);
+            }
+            return null;
+        });
 
         JsonObject result = new JsonObject();
         result.addProperty("class", className);
@@ -703,7 +918,7 @@ final class McpTools {
         return result;
     }
 
-    private JsonObject editInstruction(JsonObject arguments) {
+    private JsonObject editInstruction(JsonObject arguments) throws Exception {
         ClassNode classNode = findClass(requiredString(arguments, "class"));
         MethodNode method = findMethod(classNode, requiredString(arguments, "method"),
                 requiredString(arguments, "descriptor"));
@@ -714,31 +929,40 @@ final class McpTools {
         }
         AbstractInsnNode anchor = method.instructions.get(instructionIndex);
         JsonObject previous = instruction(method, instructionIndex, anchor);
-        AbstractInsnNode edited = null;
-
-        synchronized (mutationLock) {
-            switch (operation) {
-                case "replace" -> {
-                    requireRealInstruction(anchor, "replace");
-                    edited = createInstruction(method, requiredObject(arguments, "instruction"));
-                    copyTypeAnnotations(anchor, edited);
-                    method.instructions.set(anchor, edited);
-                }
-                case "insert_before" -> {
-                    edited = createInstruction(method, requiredObject(arguments, "instruction"));
-                    method.instructions.insertBefore(anchor, edited);
-                }
-                case "insert_after" -> {
-                    edited = createInstruction(method, requiredObject(arguments, "instruction"));
-                    method.instructions.insert(anchor, edited);
-                }
-                case "remove" -> {
-                    requireRealInstruction(anchor, "remove");
-                    method.instructions.remove(anchor);
-                }
-                default -> throw new IllegalArgumentException("Unsupported operation: " + operation);
-            }
-        }
+        AbstractInsnNode edited = workspace.mutate(
+                operation + " instruction in " + classNode.name + "." + method.name + method.desc,
+                Set.of(classNode.name), () -> {
+                    synchronized (mutationLock) {
+                        return switch (operation) {
+                            case "replace" -> {
+                                requireRealInstruction(anchor, "replace");
+                                AbstractInsnNode replacement = createInstruction(method,
+                                        requiredObject(arguments, "instruction"));
+                                copyTypeAnnotations(anchor, replacement);
+                                method.instructions.set(anchor, replacement);
+                                yield replacement;
+                            }
+                            case "insert_before" -> {
+                                AbstractInsnNode inserted = createInstruction(method,
+                                        requiredObject(arguments, "instruction"));
+                                method.instructions.insertBefore(anchor, inserted);
+                                yield inserted;
+                            }
+                            case "insert_after" -> {
+                                AbstractInsnNode inserted = createInstruction(method,
+                                        requiredObject(arguments, "instruction"));
+                                method.instructions.insert(anchor, inserted);
+                                yield inserted;
+                            }
+                            case "remove" -> {
+                                requireRealInstruction(anchor, "remove");
+                                method.instructions.remove(anchor);
+                                yield null;
+                            }
+                            default -> throw new IllegalArgumentException("Unsupported operation: " + operation);
+                        };
+                    }
+                });
         context.methodModified(classNode, method);
 
         JsonObject result = new JsonObject();
@@ -782,7 +1006,7 @@ final class McpTools {
         return result;
     }
 
-    private JsonObject replaceConstant(JsonObject arguments) {
+    private JsonObject replaceConstant(JsonObject arguments) throws Exception {
         ClassNode classNode = findClass(requiredString(arguments, "class"));
         MethodNode method = findMethod(classNode, requiredString(arguments, "method"),
                 requiredString(arguments, "descriptor"));
@@ -799,9 +1023,13 @@ final class McpTools {
         String value = requiredStringAllowEmpty(arguments, "value");
         Object replacement = parseConstant(valueType, value);
         JsonObject previous = constant(instructionIndex, ldc.cst);
-        synchronized (mutationLock) {
-            ldc.cst = replacement;
-        }
+        workspace.mutate("Replace constant in " + classNode.name + "." + method.name + method.desc,
+                Set.of(classNode.name), () -> {
+                    synchronized (mutationLock) {
+                        ldc.cst = replacement;
+                    }
+                    return null;
+                });
         context.methodModified(classNode, method);
 
         JsonObject result = new JsonObject();
