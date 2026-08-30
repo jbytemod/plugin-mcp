@@ -29,7 +29,7 @@ final class McpServer implements Closeable {
     private static final Gson GSON = new Gson();
 
     private final HttpServer httpServer;
-    private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+    private final ExecutorService executor;
     private final McpTools tools;
     private final String endpoint;
     private volatile boolean running;
@@ -37,6 +37,7 @@ final class McpServer implements Closeable {
     McpServer(PluginContext context, int port) throws IOException {
         InetSocketAddress address = new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port);
         this.httpServer = HttpServer.create(address, 0);
+        this.executor = Executors.newVirtualThreadPerTaskExecutor();
         this.httpServer.createContext("/mcp", this::handle);
         this.httpServer.setExecutor(executor);
         this.tools = new McpTools(context);
@@ -54,6 +55,10 @@ final class McpServer implements Closeable {
 
     String getEndpoint() {
         return endpoint;
+    }
+
+    int getPort() {
+        return httpServer.getAddress().getPort();
     }
 
     @Override

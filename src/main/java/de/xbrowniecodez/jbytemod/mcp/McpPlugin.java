@@ -13,6 +13,7 @@ import javax.swing.SwingUtilities;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.net.BindException;
 import java.util.Map;
 import java.util.prefs.Preferences;
 
@@ -21,6 +22,7 @@ public final class McpPlugin extends Plugin {
     private static final String PORT_PROPERTY = "jbytemod.mcp.port";
     private static final String PORT_PREFERENCE = "port";
     private static final String ENABLED_PREFERENCE = "enabled";
+    private static final int PORT_SEARCH_LIMIT = 100;
     private static final Preferences PREFERENCES = Preferences.userNodeForPackage(McpPlugin.class);
 
     private McpServer server;
@@ -75,7 +77,7 @@ public final class McpPlugin extends Plugin {
         constraints.gridy = 1;
         constraints.gridwidth = 1;
         constraints.insets = new Insets(0, 0, 8, 8);
-        panel.add(new JLabel("Port:"), constraints);
+        panel.add(new JLabel("Preferred port:"), constraints);
 
         constraints.gridx = 1;
         constraints.insets = new Insets(0, 0, 8, 0);
@@ -124,13 +126,32 @@ public final class McpPlugin extends Plugin {
             return;
         }
         try {
-            server = new McpServer(getContext(), port);
+            server = bindServer();
             server.start();
             getContext().log("MCP server listening at " + server.getEndpoint());
         } catch (Exception exception) {
             server = null;
             getContext().logError("Could not start MCP server on 127.0.0.1:" + port, exception);
         }
+    }
+
+    private McpServer bindServer() throws Exception {
+        int lastSequentialPort = Math.min(65535, port + PORT_SEARCH_LIMIT - 1);
+        for (int candidate = port; candidate <= lastSequentialPort; candidate++) {
+            try {
+                McpServer candidateServer = new McpServer(getContext(), candidate);
+                if (candidate != port) {
+                    getContext().log("MCP port " + port + " is in use; using " + candidate + " instead");
+                }
+                return candidateServer;
+            } catch (BindException ignored) {
+            }
+        }
+
+        McpServer candidateServer = new McpServer(getContext(), 0);
+        getContext().log("No free MCP port found near " + port + "; using "
+                + candidateServer.getPort() + " instead");
+        return candidateServer;
     }
 
     private void stopServer() {

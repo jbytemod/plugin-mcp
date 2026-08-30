@@ -90,7 +90,7 @@ Add that URL as an HTTP MCP server in your client. For clients using JSON config
 
 The exact configuration format depends on the MCP client. The server only accepts connections from the local machine.
 
-The port and server state can be changed from **Plugins > MCP Server**. The settings are kept across restarts.
+The preferred port and server state can be changed from **Plugins > MCP Server**. The settings are kept across restarts. If the preferred port is already used by another JByteMod instance, the plugin automatically uses the next available port and shows the actual endpoint in this dialog and the log.
 
 To override the saved port at launch, use:
 
