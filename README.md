@@ -6,6 +6,10 @@ An MCP server for [JByteMod Remastered](https://github.com/apkreader/JByteMod-Re
 
 | Tool | Description |
 | --- | --- |
+| `list_jvms` | List running local JVM processes that are available for attachment. |
+| `attach_jvm` | Attach JByteMod to a process by PID and load its runtime classes. |
+| `refresh_attached_jvm` | Reload classes from the attached JVM and discard unapplied in-memory edits. |
+| `apply_changes` | Redefine modified classes in the attached JVM. |
 | `archive_summary` | Show the archive type, source, class/resource counts, and current selection. |
 | `list_classes` | Search and page through the classes in the active archive. |
 | `search_members` | Search fields and methods by class name, member name, or descriptor. |
@@ -44,7 +48,7 @@ The decompilation tools expose every decompiler provided by JByteMod:
 
 Whole-class replacement is also supported through `get_class_file` and `replace_class`, which makes it possible to edit a class with an external ASM-based tool and load the result back into JByteMod.
 
-Changes are made to JByteMod's in-memory archive. They are not written to disk or applied to an attached JVM until you explicitly save or apply them in JByteMod.
+Changes are made to JByteMod's in-memory archive. They are not written to disk automatically. For an attached process, use `apply_changes` to redefine the modified classes in the target JVM. Standard JVM redefinition restrictions still apply, so fields, methods, inheritance, and other structural details cannot be added or removed.
 
 ## Installation
 
@@ -90,7 +94,7 @@ You can also start or stop the server from the plugin menu.
 
 ## Building from source
 
-JDK 21 and Maven are required. The matching JByteMod API artifact must be installed in your local Maven repository first:
+JByteMod 2.11.0, JDK 21, and Maven are required. The matching JByteMod API artifact must be installed in your local Maven repository first:
 
 ```sh
 git clone https://github.com/apkreader/JByteMod-Remastered.git

@@ -14,7 +14,7 @@
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
         <asm.version>9.10-SNAPSHOT</asm.version>
-        <jbytemod.version>2.10.0</jbytemod.version>
+        <jbytemod.version>2.11.0</jbytemod.version>
     </properties>
 
     <repositories>

@@ -6,6 +6,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import de.xbrowniecodez.jbytemod.plugin.ArchiveInfo;
 import de.xbrowniecodez.jbytemod.plugin.ArchiveType;
+import de.xbrowniecodez.jbytemod.plugin.JvmProcess;
 import de.xbrowniecodez.jbytemod.plugin.PluginContext;
 import org.objectweb.asm.ConstantDynamic;
 import org.objectweb.asm.ClassWriter;
@@ -67,6 +68,20 @@ final class McpTools {
     JsonObject list(boolean modern) {
         JsonObject result = new JsonObject();
         JsonArray tools = new JsonArray();
+        tools.add(tool("list_jvms", "List local JVM processes that JByteMod can attach to.",
+                schema(new JsonObject()), true, true));
+
+        JsonObject attachProperties = new JsonObject();
+        attachProperties.add("pid", stringProperty("PID returned by list_jvms."));
+        tools.add(tool("attach_jvm", "Attach JByteMod to a running local JVM and load its classes.",
+                schema(attachProperties, "pid"), false, false, false));
+        tools.add(tool("refresh_attached_jvm",
+                "Reload classes from the attached JVM, discarding unapplied in-memory edits.",
+                schema(new JsonObject()), false, true, true));
+        tools.add(tool("apply_changes",
+                "Redefine modified classes in the attached JVM. JVM class-redefinition restrictions apply.",
+                schema(new JsonObject()), false, true, false));
+
         tools.add(tool("archive_summary", "Show information about the archive currently open in JByteMod.",
                 schema(new JsonObject()), true, true));
 
@@ -202,6 +217,10 @@ final class McpTools {
                 ? params.getAsJsonObject("arguments") : new JsonObject();
         try {
             JsonElement output = switch (name) {
+                case "list_jvms" -> listJvms();
+                case "attach_jvm" -> attachJvm(arguments);
+                case "refresh_attached_jvm" -> refreshAttachedJvm();
+                case "apply_changes" -> applyChanges();
                 case "archive_summary" -> archiveSummary();
                 case "list_classes" -> listClasses(arguments);
                 case "search_members" -> searchMembers(arguments);
@@ -231,6 +250,45 @@ final class McpTools {
             String message = exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
             return toolResult(new com.google.gson.JsonPrimitive(message), true);
         }
+    }
+
+    private JsonObject listJvms() {
+        List<JvmProcess> processes = context.listJvmProcesses();
+        JsonArray items = new JsonArray();
+        for (JvmProcess process : processes) {
+            JsonObject item = new JsonObject();
+            item.addProperty("pid", process.pid());
+            item.addProperty("displayName", process.displayName());
+            items.add(item);
+        }
+        JsonObject result = new JsonObject();
+        result.addProperty("total", processes.size());
+        result.add("processes", items);
+        return result;
+    }
+
+    private JsonObject attachJvm(JsonObject arguments) throws Exception {
+        String pid = requiredString(arguments, "pid");
+        context.attachToJvm(pid);
+        JsonObject result = archiveSummary();
+        result.addProperty("pid", pid);
+        result.addProperty("attached", true);
+        return result;
+    }
+
+    private JsonObject refreshAttachedJvm() throws Exception {
+        context.refreshAttachedJvm();
+        JsonObject result = archiveSummary();
+        result.addProperty("refreshed", true);
+        return result;
+    }
+
+    private JsonObject applyChanges() throws Exception {
+        int changedClasses = context.applyChangesToAttachedJvm();
+        JsonObject result = new JsonObject();
+        result.addProperty("changedClasses", changedClasses);
+        result.addProperty("applied", true);
+        return result;
     }
 
     private JsonObject archiveSummary() {
