@@ -7,6 +7,7 @@ An MCP server for [JByteMod Remastered](https://github.com/apkreader/JByteMod-Re
 | Tool | Description |
 | --- | --- |
 | `open_file` | Open a local JAR, class, or APK in the current JByteMod window. |
+| `save_file` | Save the active archive, class, or attached-JVM class dump to a local file. |
 | `list_jvms` | List running local JVM processes that are available for attachment. |
 | `attach_jvm` | Attach JByteMod to a process by PID and load its runtime classes. |
 | `refresh_attached_jvm` | Reload classes from the attached JVM and discard unapplied in-memory edits. |
@@ -50,6 +51,8 @@ The decompilation tools expose every decompiler provided by JByteMod:
 Whole-class replacement is also supported through `get_class_file` and `replace_class`, which makes it possible to edit a class with an external ASM-based tool and load the result back into JByteMod.
 
 Changes are made to JByteMod's in-memory archive. They are not written to disk automatically. For an attached process, use `apply_changes` to redefine the modified classes in the target JVM. Standard JVM redefinition restrictions still apply, so fields, methods, inheritance, and other structural details cannot be added or removed.
+
+Use `save_file` to write the current archive to disk or dump the classes loaded from an attached JVM into a JAR. Existing output files are overwritten.
 
 ## Installation
 

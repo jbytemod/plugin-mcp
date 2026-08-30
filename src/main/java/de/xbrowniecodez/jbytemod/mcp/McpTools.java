@@ -74,6 +74,12 @@ final class McpTools {
                 "Open a local JAR, class, or APK in JByteMod. This replaces the current archive.",
                 schema(openFileProperties, "path"), false, true, true));
 
+        JsonObject saveFileProperties = new JsonObject();
+        saveFileProperties.add("path", stringProperty("Absolute or working-directory-relative output path."));
+        tools.add(tool("save_file",
+                "Save the active archive or runtime class dump to a local file. Existing files are overwritten.",
+                schema(saveFileProperties, "path"), false, true, true));
+
         tools.add(tool("list_jvms", "List local JVM processes that JByteMod can attach to.",
                 schema(new JsonObject()), true, true));
 
@@ -224,6 +230,7 @@ final class McpTools {
         try {
             JsonElement output = switch (name) {
                 case "open_file" -> openFile(arguments);
+                case "save_file" -> saveFile(arguments);
                 case "list_jvms" -> listJvms();
                 case "attach_jvm" -> attachJvm(arguments);
                 case "refresh_attached_jvm" -> refreshAttachedJvm();
@@ -265,6 +272,14 @@ final class McpTools {
         JsonObject result = archiveSummary();
         result.addProperty("path", path);
         result.addProperty("opened", true);
+        return result;
+    }
+
+    private JsonObject saveFile(JsonObject arguments) throws Exception {
+        String outputPath = context.saveFile(requiredString(arguments, "path"));
+        JsonObject result = new JsonObject();
+        result.addProperty("path", outputPath);
+        result.addProperty("saved", true);
         return result;
     }
 
