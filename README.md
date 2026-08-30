@@ -33,6 +33,17 @@ An MCP server for [JByteMod Remastered](https://github.com/apkreader/JByteMod-Re
 | `verify_class` | Validate class structure and method data flow with ASM. |
 | `get_class_file` | Export the current bytes of a class as Base64. |
 | `replace_class` | Replace a class in memory using a Base64-encoded class file. |
+| `rename_class` | Rename a class and update references and descriptors throughout the loaded archive. |
+| `rename_method` | Rename a declared method and update matching calls throughout the loaded archive. |
+| `rename_field` | Rename a declared field and update matching references throughout the loaded archive. |
+| `set_access_flags` | Replace the ASM access flags on a class, field, or method. |
+| `add_field` | Add a field, including an optional constant value. |
+| `remove_field` | Remove a field from a class. |
+| `add_method` | Add a method with a valid default return body. |
+| `remove_method` | Remove a method from a class. |
+| `copy_method` | Copy a complete method between loaded classes. |
+| `replace_method_body` | Replace a method body with another loaded method that has the same descriptor. |
+| `edit_class_metadata` | Change a class's superclass, interfaces, signature, or source-file metadata. |
 | `get_method_bytecode` | Render a method as readable JVM bytecode. |
 | `method_calls` | Find incoming and outgoing calls for a method. |
 | `decompile_class` | Decompile a class with any available JByteMod decompiler. |
@@ -59,9 +70,9 @@ The decompilation tools expose every decompiler provided by JByteMod:
 
 `edit_instruction` supports regular zero-operand instructions as well as integer, local-variable, type, field, method, jump, LDC, IINC, and MULTIANEWARRAY instructions. Jump targets refer to label instruction indices returned by `list_instructions`.
 
-Whole-class replacement is also supported through `get_class_file` and `replace_class`, which makes it possible to edit a class with an external ASM-based tool and load the result back into JByteMod.
+Whole-class replacement is also supported through `get_class_file` and `replace_class`, which makes it possible to edit a class with an external ASM-based tool and load the result back into JByteMod. Refactoring commands update matching references in every loaded class and participate in transactions, undo, redo, diffs, and change tracking.
 
-Changes are made to JByteMod's in-memory archive. They are not written to disk automatically. For an attached process, use `apply_changes` to redefine the modified classes in the target JVM. Standard JVM redefinition restrictions still apply, so fields, methods, inheritance, and other structural details cannot be added or removed.
+Changes are made to JByteMod's in-memory archive. They are not written to disk automatically. For an attached process, use `validate_hotswap` before `apply_changes`. Standard JVM redefinition restrictions still apply, so structural tools such as adding or removing fields or methods, changing inheritance, and renaming classes cannot normally be applied to an already loaded class. They remain useful for archives that will be saved to disk.
 
 Use `save_file` to write the current archive to disk or dump the classes loaded from an attached JVM into a JAR. Existing output files are overwritten.
 

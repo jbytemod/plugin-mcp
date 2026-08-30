@@ -11,7 +11,10 @@ import de.xbrowniecodez.jbytemod.plugin.PluginContext;
 import org.objectweb.asm.ConstantDynamic;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Handle;
+import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
+import org.objectweb.asm.commons.ClassRemapper;
+import org.objectweb.asm.commons.Remapper;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FieldNode;
@@ -191,6 +194,87 @@ final class McpTools {
         tools.add(tool("replace_class", "Replace a class in the in-memory archive from class-file bytes.",
                 schema(replaceClassProperties, "class", "classFileBase64"), false, true, true));
 
+        JsonObject renameClassProperties = classProperties.deepCopy();
+        renameClassProperties.add("newName", stringProperty("New JVM internal or dotted class name."));
+        tools.add(tool("rename_class", "Rename a class and update loaded bytecode references and descriptors.",
+                schema(renameClassProperties, "class", "newName"), false, true, false));
+
+        JsonObject renameMethodProperties = new JsonObject();
+        renameMethodProperties.add("class", stringProperty("Declaring JVM internal or dotted class name."));
+        renameMethodProperties.add("method", stringProperty("Current method name."));
+        renameMethodProperties.add("descriptor", stringProperty("Exact JVM method descriptor."));
+        renameMethodProperties.add("newName", stringProperty("New method name."));
+        tools.add(tool("rename_method", "Rename a method and update matching calls in all loaded classes.",
+                schema(renameMethodProperties, "class", "method", "descriptor", "newName"), false, true, false));
+
+        JsonObject renameFieldProperties = new JsonObject();
+        renameFieldProperties.add("class", stringProperty("Declaring JVM internal or dotted class name."));
+        renameFieldProperties.add("field", stringProperty("Current field name."));
+        renameFieldProperties.add("descriptor", stringProperty("Exact JVM field descriptor."));
+        renameFieldProperties.add("newName", stringProperty("New field name."));
+        tools.add(tool("rename_field", "Rename a field and update matching references in all loaded classes.",
+                schema(renameFieldProperties, "class", "field", "descriptor", "newName"), false, true, false));
+
+        JsonObject accessProperties = new JsonObject();
+        accessProperties.add("target", enumProperty("Target kind.", "class", "field", "method"));
+        accessProperties.add("class", stringProperty("Declaring JVM internal or dotted class name."));
+        accessProperties.add("name", stringProperty("Field or method name; omit for a class."));
+        accessProperties.add("descriptor", stringProperty("Field or method descriptor; omit for a class."));
+        accessProperties.add("access", integerProperty("Complete ASM access-flag value.", 0, Integer.MAX_VALUE));
+        tools.add(tool("set_access_flags", "Replace access flags on a class, field, or method.",
+                schema(accessProperties, "target", "class", "access"), false, true, true));
+
+        JsonObject addFieldProperties = new JsonObject();
+        addFieldProperties.add("class", stringProperty("Declaring JVM internal or dotted class name."));
+        addFieldProperties.add("field", stringProperty("New field name."));
+        addFieldProperties.add("descriptor", stringProperty("JVM field descriptor."));
+        addFieldProperties.add("access", integerProperty("ASM access-flag value. Defaults to 1 (public).", 0, Integer.MAX_VALUE));
+        addFieldProperties.add("signature", stringProperty("Optional generic signature."));
+        addFieldProperties.add("valueType", enumProperty("Optional ConstantValue type.",
+                "none", "string", "int", "long", "float", "double"));
+        addFieldProperties.add("value", stringProperty("ConstantValue encoded as text."));
+        tools.add(tool("add_field", "Add a field to a class. This is not compatible with standard HotSwap.",
+                schema(addFieldProperties, "class", "field", "descriptor"), false, true, false));
+        tools.add(tool("remove_field", "Remove a field from a class. This is not compatible with standard HotSwap.",
+                schema(renameFieldProperties, "class", "field", "descriptor"), false, true, false));
+
+        JsonObject addMethodProperties = new JsonObject();
+        addMethodProperties.add("class", stringProperty("Declaring JVM internal or dotted class name."));
+        addMethodProperties.add("method", stringProperty("New method name."));
+        addMethodProperties.add("descriptor", stringProperty("JVM method descriptor."));
+        addMethodProperties.add("access", integerProperty("ASM access-flag value. Defaults to 1 (public).", 0, Integer.MAX_VALUE));
+        addMethodProperties.add("signature", stringProperty("Optional generic signature."));
+        tools.add(tool("add_method", "Add a method with a valid default return body.",
+                schema(addMethodProperties, "class", "method", "descriptor"), false, true, false));
+        tools.add(tool("remove_method", "Remove a method from a class. This is not compatible with standard HotSwap.",
+                schema(renameMethodProperties, "class", "method", "descriptor"), false, true, false));
+
+        JsonObject copyMethodProperties = new JsonObject();
+        copyMethodProperties.add("sourceClass", stringProperty("Class containing the source method."));
+        copyMethodProperties.add("targetClass", stringProperty("Class that will receive the copied method."));
+        copyMethodProperties.add("method", stringProperty("Source method name."));
+        copyMethodProperties.add("descriptor", stringProperty("Source method descriptor."));
+        copyMethodProperties.add("newName", stringProperty("Optional name for the copied method."));
+        tools.add(tool("copy_method", "Copy a complete method between loaded classes.",
+                schema(copyMethodProperties, "sourceClass", "targetClass", "method", "descriptor"),
+                false, true, false));
+
+        JsonObject replaceBodyProperties = copyMethodProperties.deepCopy();
+        replaceBodyProperties.add("targetMethod", stringProperty("Target method name."));
+        replaceBodyProperties.add("targetDescriptor", stringProperty("Target method descriptor."));
+        tools.add(tool("replace_method_body", "Replace a method body from another loaded method with the same descriptor.",
+                schema(replaceBodyProperties, "sourceClass", "targetClass", "method", "descriptor",
+                        "targetMethod", "targetDescriptor"), false, true, false));
+
+        JsonObject metadataProperties = classProperties.deepCopy();
+        metadataProperties.add("superClass", stringProperty("Optional new superclass; use an empty string for none."));
+        metadataProperties.add("signature", stringProperty("Optional generic signature; use an empty string to clear."));
+        metadataProperties.add("sourceFile", stringProperty("Optional SourceFile; use an empty string to clear."));
+        metadataProperties.add("interfaces", arrayProperty("Complete list of JVM internal or dotted interface names.",
+                stringProperty("Interface name.")));
+        tools.add(tool("edit_class_metadata", "Edit superclass, interfaces, signature, or source-file metadata.",
+                schema(metadataProperties, "class"), false, true, false));
+
         JsonObject methodProperties = new JsonObject();
         methodProperties.add("class", stringProperty("JVM internal or dotted class name."));
         methodProperties.add("method", stringProperty("Method name."));
@@ -297,6 +381,17 @@ final class McpTools {
                 case "verify_class" -> verifyClass(arguments);
                 case "get_class_file" -> classFile(arguments);
                 case "replace_class" -> replaceClass(arguments);
+                case "rename_class" -> renameClass(arguments);
+                case "rename_method" -> renameMethod(arguments);
+                case "rename_field" -> renameField(arguments);
+                case "set_access_flags" -> setAccessFlags(arguments);
+                case "add_field" -> addField(arguments);
+                case "remove_field" -> removeField(arguments);
+                case "add_method" -> addMethod(arguments);
+                case "remove_method" -> removeMethod(arguments);
+                case "copy_method" -> copyMethod(arguments);
+                case "replace_method_body" -> replaceMethodBody(arguments);
+                case "edit_class_metadata" -> editClassMetadata(arguments);
                 case "get_method_bytecode" -> methodBytecode(arguments);
                 case "method_calls" -> methodCalls(arguments);
                 case "decompile_class" -> decompileClass(arguments);
@@ -896,6 +991,327 @@ final class McpTools {
         return result;
     }
 
+    private JsonObject renameClass(JsonObject arguments) throws Exception {
+        String oldName = findClass(requiredString(arguments, "class")).name;
+        String newName = normalizeClassName(requiredString(arguments, "newName"));
+        if (classes().containsKey(newName)) {
+            throw new IllegalArgumentException("A class named " + newName + " already exists");
+        }
+        Set<String> affected = new LinkedHashSet<>(classes().keySet());
+        affected.add(newName);
+        workspace.mutate("Rename class " + oldName + " to " + newName, affected, () -> {
+            remapAll(new Remapper() {
+                @Override
+                public String map(String internalName) {
+                    return oldName.equals(internalName) ? newName : internalName;
+                }
+            });
+            return null;
+        });
+        JsonObject result = new JsonObject();
+        result.addProperty("previousName", oldName);
+        result.addProperty("class", newName);
+        result.addProperty("updatedClassCount", affected.size());
+        result.addProperty("modified", true);
+        return result;
+    }
+
+    private JsonObject renameMethod(JsonObject arguments) throws Exception {
+        ClassNode owner = findClass(requiredString(arguments, "class"));
+        String oldName = requiredString(arguments, "method");
+        String descriptor = requiredString(arguments, "descriptor");
+        findMethod(owner, oldName, descriptor);
+        String newName = requiredString(arguments, "newName");
+        if (oldName.startsWith("<") || newName.startsWith("<")) {
+            throw new IllegalArgumentException("Constructors and class initializers cannot be renamed");
+        }
+        if (owner.methods.stream().anyMatch(method -> method.name.equals(newName) && method.desc.equals(descriptor))) {
+            throw new IllegalArgumentException("Method already exists: " + newName + descriptor);
+        }
+        Set<String> affected = new LinkedHashSet<>(classes().keySet());
+        workspace.mutate("Rename method " + owner.name + "." + oldName + descriptor, affected, () -> {
+            remapAll(new Remapper() {
+                @Override
+                public String mapMethodName(String declaringOwner, String name, String methodDescriptor) {
+                    return owner.name.equals(declaringOwner) && oldName.equals(name)
+                            && descriptor.equals(methodDescriptor) ? newName : name;
+                }
+            });
+            return null;
+        });
+        JsonObject result = new JsonObject();
+        result.addProperty("class", owner.name);
+        result.addProperty("previousName", oldName);
+        result.addProperty("method", newName);
+        result.addProperty("descriptor", descriptor);
+        result.addProperty("modified", true);
+        return result;
+    }
+
+    private JsonObject renameField(JsonObject arguments) throws Exception {
+        ClassNode owner = findClass(requiredString(arguments, "class"));
+        String oldName = requiredString(arguments, "field");
+        String descriptor = requiredString(arguments, "descriptor");
+        findField(owner, oldName, descriptor);
+        String newName = requiredString(arguments, "newName");
+        if (owner.fields.stream().anyMatch(field -> field.name.equals(newName) && field.desc.equals(descriptor))) {
+            throw new IllegalArgumentException("Field already exists: " + newName + " " + descriptor);
+        }
+        Set<String> affected = new LinkedHashSet<>(classes().keySet());
+        workspace.mutate("Rename field " + owner.name + "." + oldName + " " + descriptor, affected, () -> {
+            remapAll(new Remapper() {
+                @Override
+                public String mapFieldName(String declaringOwner, String name, String fieldDescriptor) {
+                    return owner.name.equals(declaringOwner) && oldName.equals(name)
+                            && descriptor.equals(fieldDescriptor) ? newName : name;
+                }
+            });
+            return null;
+        });
+        JsonObject result = new JsonObject();
+        result.addProperty("class", owner.name);
+        result.addProperty("previousName", oldName);
+        result.addProperty("field", newName);
+        result.addProperty("descriptor", descriptor);
+        result.addProperty("modified", true);
+        return result;
+    }
+
+    private JsonObject setAccessFlags(JsonObject arguments) throws Exception {
+        ClassNode classNode = findClass(requiredString(arguments, "class"));
+        String target = requiredString(arguments, "target").toLowerCase(Locale.ROOT);
+        int access = requiredInt(arguments, "access", 0, Integer.MAX_VALUE);
+        int[] previous = new int[1];
+        String member;
+        switch (target) {
+            case "class" -> member = classNode.name;
+            case "field" -> member = findField(classNode, requiredString(arguments, "name"),
+                    requiredString(arguments, "descriptor")).name;
+            case "method" -> member = findMethod(classNode, requiredString(arguments, "name"),
+                    requiredString(arguments, "descriptor")).name;
+            default -> throw new IllegalArgumentException("Unsupported target: " + target);
+        }
+        workspace.mutate("Set access flags on " + classNode.name + "." + member,
+                Set.of(classNode.name), () -> {
+                    switch (target) {
+                        case "class" -> {
+                            previous[0] = classNode.access;
+                            classNode.access = access;
+                        }
+                        case "field" -> {
+                            FieldNode field = findField(classNode, requiredString(arguments, "name"),
+                                    requiredString(arguments, "descriptor"));
+                            previous[0] = field.access;
+                            field.access = access;
+                        }
+                        case "method" -> {
+                            MethodNode method = findMethod(classNode, requiredString(arguments, "name"),
+                                    requiredString(arguments, "descriptor"));
+                            previous[0] = method.access;
+                            method.access = access;
+                        }
+                    }
+                    context.updateTree();
+                    return null;
+                });
+        JsonObject result = new JsonObject();
+        result.addProperty("target", target);
+        result.addProperty("class", classNode.name);
+        result.addProperty("previousAccess", previous[0]);
+        result.addProperty("access", access);
+        result.addProperty("modified", previous[0] != access);
+        return result;
+    }
+
+    private JsonObject addField(JsonObject arguments) throws Exception {
+        ClassNode classNode = findClass(requiredString(arguments, "class"));
+        String name = requiredString(arguments, "field");
+        String descriptor = validFieldDescriptor(requiredString(arguments, "descriptor"));
+        if (classNode.fields.stream().anyMatch(field -> field.name.equals(name) && field.desc.equals(descriptor))) {
+            throw new IllegalArgumentException("Field already exists: " + name + " " + descriptor);
+        }
+        int access = optionalInt(arguments, "access", Opcodes.ACC_PUBLIC, 0, Integer.MAX_VALUE);
+        String signature = nullableOptionalString(arguments, "signature");
+        Object value = parseFieldValue(arguments);
+        workspace.mutate("Add field " + classNode.name + "." + name,
+                Set.of(classNode.name), () -> {
+                    classNode.fields.add(new FieldNode(access, name, descriptor, signature, value));
+                    context.updateTree();
+                    return null;
+                });
+        JsonObject result = new JsonObject();
+        result.addProperty("class", classNode.name);
+        result.addProperty("field", name);
+        result.addProperty("descriptor", descriptor);
+        result.addProperty("access", access);
+        result.addProperty("modified", true);
+        return result;
+    }
+
+    private JsonObject removeField(JsonObject arguments) throws Exception {
+        ClassNode classNode = findClass(requiredString(arguments, "class"));
+        FieldNode field = findField(classNode, requiredString(arguments, "field"),
+                requiredString(arguments, "descriptor"));
+        workspace.mutate("Remove field " + classNode.name + "." + field.name,
+                Set.of(classNode.name), () -> {
+                    classNode.fields.remove(field);
+                    context.updateTree();
+                    return null;
+                });
+        JsonObject result = new JsonObject();
+        result.addProperty("class", classNode.name);
+        result.addProperty("field", field.name);
+        result.addProperty("descriptor", field.desc);
+        result.addProperty("removed", true);
+        return result;
+    }
+
+    private JsonObject addMethod(JsonObject arguments) throws Exception {
+        ClassNode classNode = findClass(requiredString(arguments, "class"));
+        String name = requiredString(arguments, "method");
+        String descriptor = validMethodDescriptor(requiredString(arguments, "descriptor"));
+        if ("<init>".equals(name)) {
+            throw new IllegalArgumentException("Use copy_method to add a valid constructor");
+        }
+        if (classNode.methods.stream().anyMatch(method -> method.name.equals(name) && method.desc.equals(descriptor))) {
+            throw new IllegalArgumentException("Method already exists: " + name + descriptor);
+        }
+        int access = optionalInt(arguments, "access", Opcodes.ACC_PUBLIC, 0, Integer.MAX_VALUE);
+        String signature = nullableOptionalString(arguments, "signature");
+        MethodNode method = defaultMethod(access, name, descriptor, signature);
+        workspace.mutate("Add method " + classNode.name + "." + name + descriptor,
+                Set.of(classNode.name), () -> {
+                    classNode.methods.add(method);
+                    context.updateTree();
+                    return null;
+                });
+        JsonObject result = new JsonObject();
+        result.addProperty("class", classNode.name);
+        result.addProperty("method", name);
+        result.addProperty("descriptor", descriptor);
+        result.addProperty("access", access);
+        result.addProperty("modified", true);
+        return result;
+    }
+
+    private JsonObject removeMethod(JsonObject arguments) throws Exception {
+        ClassNode classNode = findClass(requiredString(arguments, "class"));
+        MethodNode method = findMethod(classNode, requiredString(arguments, "method"),
+                requiredString(arguments, "descriptor"));
+        workspace.mutate("Remove method " + classNode.name + "." + method.name + method.desc,
+                Set.of(classNode.name), () -> {
+                    classNode.methods.remove(method);
+                    context.updateTree();
+                    return null;
+                });
+        JsonObject result = new JsonObject();
+        result.addProperty("class", classNode.name);
+        result.addProperty("method", method.name);
+        result.addProperty("descriptor", method.desc);
+        result.addProperty("removed", true);
+        return result;
+    }
+
+    private JsonObject copyMethod(JsonObject arguments) throws Exception {
+        ClassNode sourceClass = findClass(requiredString(arguments, "sourceClass"));
+        ClassNode targetClass = findClass(requiredString(arguments, "targetClass"));
+        MethodNode source = findMethod(sourceClass, requiredString(arguments, "method"),
+                requiredString(arguments, "descriptor"));
+        String newName = optionalString(arguments, "newName", source.name);
+        if (targetClass.methods.stream().anyMatch(method -> method.name.equals(newName) && method.desc.equals(source.desc))) {
+            throw new IllegalArgumentException("Target method already exists: " + newName + source.desc);
+        }
+        MethodNode copy = cloneMethod(source, newName);
+        workspace.mutate("Copy method to " + targetClass.name + "." + newName + source.desc,
+                Set.of(targetClass.name), () -> {
+                    targetClass.methods.add(copy);
+                    context.updateTree();
+                    return null;
+                });
+        JsonObject result = new JsonObject();
+        result.addProperty("sourceClass", sourceClass.name);
+        result.addProperty("targetClass", targetClass.name);
+        result.addProperty("method", newName);
+        result.addProperty("descriptor", source.desc);
+        result.addProperty("modified", true);
+        return result;
+    }
+
+    private JsonObject replaceMethodBody(JsonObject arguments) throws Exception {
+        ClassNode sourceClass = findClass(requiredString(arguments, "sourceClass"));
+        ClassNode targetClass = findClass(requiredString(arguments, "targetClass"));
+        MethodNode source = findMethod(sourceClass, requiredString(arguments, "method"),
+                requiredString(arguments, "descriptor"));
+        MethodNode target = findMethod(targetClass, requiredString(arguments, "targetMethod"),
+                requiredString(arguments, "targetDescriptor"));
+        if (!source.desc.equals(target.desc)) {
+            throw new IllegalArgumentException("Source and target method descriptors must match");
+        }
+        MethodNode copy = cloneMethod(source, target.name);
+        workspace.mutate("Replace body of " + targetClass.name + "." + target.name + target.desc,
+                Set.of(targetClass.name), () -> {
+                    target.instructions = copy.instructions;
+                    target.tryCatchBlocks = copy.tryCatchBlocks;
+                    target.localVariables = copy.localVariables;
+                    target.visibleLocalVariableAnnotations = copy.visibleLocalVariableAnnotations;
+                    target.invisibleLocalVariableAnnotations = copy.invisibleLocalVariableAnnotations;
+                    target.maxStack = copy.maxStack;
+                    target.maxLocals = copy.maxLocals;
+                    context.methodModified(targetClass, target);
+                    return null;
+                });
+        JsonObject result = new JsonObject();
+        result.addProperty("source", sourceClass.name + "." + source.name + source.desc);
+        result.addProperty("target", targetClass.name + "." + target.name + target.desc);
+        result.addProperty("instructionCount", target.instructions.size());
+        result.addProperty("modified", true);
+        return result;
+    }
+
+    private JsonObject editClassMetadata(JsonObject arguments) throws Exception {
+        ClassNode classNode = findClass(requiredString(arguments, "class"));
+        workspace.mutate("Edit metadata for " + classNode.name, Set.of(classNode.name), () -> {
+            if (arguments.has("superClass")) {
+                classNode.superName = nullableClassName(arguments.get("superClass").getAsString());
+            }
+            if (arguments.has("signature")) {
+                classNode.signature = emptyToNull(arguments.get("signature").getAsString());
+            }
+            if (arguments.has("sourceFile")) {
+                classNode.sourceFile = emptyToNull(arguments.get("sourceFile").getAsString());
+            }
+            if (arguments.has("interfaces")) {
+                classNode.interfaces = stringArray(arguments, "interfaces").stream()
+                        .map(McpTools::normalizeClassName).toList();
+            }
+            context.updateTree();
+            return null;
+        });
+        JsonObject result = new JsonObject();
+        result.addProperty("class", classNode.name);
+        addNullable(result, "superClass", classNode.superName);
+        addNullable(result, "signature", classNode.signature);
+        addNullable(result, "sourceFile", classNode.sourceFile);
+        result.add("interfaces", GSON.toJsonTree(classNode.interfaces));
+        result.addProperty("modified", true);
+        return result;
+    }
+
+    private void remapAll(Remapper remapper) {
+        Map<String, ClassNode> current = classes();
+        List<ClassNode> remapped = new ArrayList<>(current.size());
+        for (ClassNode classNode : current.values()) {
+            ClassNode copy = new ClassNode();
+            classNode.accept(new ClassRemapper(copy, remapper));
+            remapped.add(copy);
+        }
+        current.clear();
+        for (ClassNode classNode : remapped) {
+            current.put(classNode.name, classNode);
+        }
+        context.updateTree();
+    }
+
     private JsonObject listInstructions(JsonObject arguments) {
         ClassNode classNode = findClass(requiredString(arguments, "class"));
         MethodNode method = findMethod(classNode, requiredString(arguments, "method"),
@@ -1486,6 +1902,114 @@ final class McpTools {
                         "Method not found: " + classNode.name + "#" + name + descriptor));
     }
 
+    private static FieldNode findField(ClassNode classNode, String name, String descriptor) {
+        return classNode.fields.stream()
+                .filter(field -> field.name.equals(name) && field.desc.equals(descriptor))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Field not found: " + classNode.name + "#" + name + " " + descriptor));
+    }
+
+    private static String normalizeClassName(String name) {
+        String normalized = name.trim().replace('.', '/');
+        if (normalized.isEmpty() || normalized.startsWith("/") || normalized.endsWith("/")
+                || normalized.contains(";") || normalized.contains("[")) {
+            throw new IllegalArgumentException("Invalid class name: " + name);
+        }
+        return normalized;
+    }
+
+    private static String nullableClassName(String name) {
+        return name == null || name.isBlank() ? null : normalizeClassName(name);
+    }
+
+    private static String validFieldDescriptor(String descriptor) {
+        try {
+            Type type = Type.getType(descriptor);
+            if (type.getSort() == Type.METHOD || type.getSort() == Type.VOID) {
+                throw new IllegalArgumentException();
+            }
+            return descriptor;
+        } catch (RuntimeException exception) {
+            throw new IllegalArgumentException("Invalid JVM field descriptor: " + descriptor);
+        }
+    }
+
+    private static String validMethodDescriptor(String descriptor) {
+        try {
+            Type.getMethodType(descriptor);
+            return descriptor;
+        } catch (RuntimeException exception) {
+            throw new IllegalArgumentException("Invalid JVM method descriptor: " + descriptor);
+        }
+    }
+
+    private static MethodNode defaultMethod(int access, String name, String descriptor, String signature) {
+        MethodNode method = new MethodNode(access, name, descriptor, signature, null);
+        if ((access & (Opcodes.ACC_ABSTRACT | Opcodes.ACC_NATIVE)) != 0) {
+            return method;
+        }
+
+        Type returnType = Type.getReturnType(descriptor);
+        switch (returnType.getSort()) {
+            case Type.VOID -> method.instructions.add(new InsnNode(Opcodes.RETURN));
+            case Type.BOOLEAN, Type.BYTE, Type.CHAR, Type.SHORT, Type.INT -> {
+                method.instructions.add(new InsnNode(Opcodes.ICONST_0));
+                method.instructions.add(new InsnNode(Opcodes.IRETURN));
+            }
+            case Type.FLOAT -> {
+                method.instructions.add(new InsnNode(Opcodes.FCONST_0));
+                method.instructions.add(new InsnNode(Opcodes.FRETURN));
+            }
+            case Type.LONG -> {
+                method.instructions.add(new InsnNode(Opcodes.LCONST_0));
+                method.instructions.add(new InsnNode(Opcodes.LRETURN));
+            }
+            case Type.DOUBLE -> {
+                method.instructions.add(new InsnNode(Opcodes.DCONST_0));
+                method.instructions.add(new InsnNode(Opcodes.DRETURN));
+            }
+            default -> {
+                method.instructions.add(new InsnNode(Opcodes.ACONST_NULL));
+                method.instructions.add(new InsnNode(Opcodes.ARETURN));
+            }
+        }
+        method.maxStack = Math.max(1, returnType.getSize());
+        method.maxLocals = (access & Opcodes.ACC_STATIC) == 0 ? 1 : 0;
+        for (Type argument : Type.getArgumentTypes(descriptor)) {
+            method.maxLocals += argument.getSize();
+        }
+        return method;
+    }
+
+    private static MethodNode cloneMethod(MethodNode source, String name) {
+        MethodNode copy = new MethodNode(source.access, name, source.desc, source.signature,
+                source.exceptions == null ? null : source.exceptions.toArray(String[]::new));
+        source.accept(copy);
+        copy.name = name;
+        return copy;
+    }
+
+    private static Object parseFieldValue(JsonObject arguments) {
+        String valueType = optionalString(arguments, "valueType", "none").toLowerCase(Locale.ROOT);
+        if ("none".equals(valueType)) {
+            return null;
+        }
+        String value = requiredStringAllowEmpty(arguments, "value");
+        try {
+            return switch (valueType) {
+                case "string" -> value;
+                case "int" -> Integer.valueOf(value);
+                case "long" -> Long.valueOf(value);
+                case "float" -> Float.valueOf(value);
+                case "double" -> Double.valueOf(value);
+                default -> throw new IllegalArgumentException("Unsupported valueType: " + valueType);
+            };
+        } catch (NumberFormatException exception) {
+            throw new IllegalArgumentException("Invalid " + valueType + " value: " + value);
+        }
+    }
+
     private static JsonObject tool(String name, String description, JsonObject inputSchema,
                                    boolean readOnly, boolean idempotent) {
         return tool(name, description, inputSchema, readOnly, false, idempotent);
@@ -1562,6 +2086,14 @@ final class McpTools {
         return property;
     }
 
+    private static JsonObject arrayProperty(String description, JsonObject itemSchema) {
+        JsonObject property = new JsonObject();
+        property.addProperty("type", "array");
+        property.addProperty("description", description);
+        property.add("items", itemSchema);
+        return property;
+    }
+
     private static JsonObject instructionProperty() {
         JsonObject properties = new JsonObject();
         properties.add("kind", enumProperty("ASM node kind.",
@@ -1629,6 +2161,28 @@ final class McpTools {
     private static String optionalString(JsonObject object, String name, String defaultValue) {
         return object.has(name) && object.get(name).isJsonPrimitive()
                 ? object.get(name).getAsString() : defaultValue;
+    }
+
+    private static String nullableOptionalString(JsonObject object, String name) {
+        return emptyToNull(optionalString(object, name, ""));
+    }
+
+    private static String emptyToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    private static List<String> stringArray(JsonObject object, String name) {
+        if (!object.has(name) || !object.get(name).isJsonArray()) {
+            throw new IllegalArgumentException(name + " must be an array of strings");
+        }
+        List<String> result = new ArrayList<>();
+        for (JsonElement element : object.getAsJsonArray(name)) {
+            if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isString()) {
+                throw new IllegalArgumentException(name + " must be an array of strings");
+            }
+            result.add(element.getAsString());
+        }
+        return result;
     }
 
     private static int optionalInt(JsonObject object, String name, int defaultValue, int minimum, int maximum) {
