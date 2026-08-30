@@ -50,6 +50,12 @@
             <version>${asm.version}</version>
             <scope>provided</scope>
         </dependency>
+        <dependency>
+            <groupId>org.ow2.asm</groupId>
+            <artifactId>asm-analysis</artifactId>
+            <version>${asm.version}</version>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
 
     <build>

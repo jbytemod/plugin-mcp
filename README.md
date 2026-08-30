@@ -52,6 +52,16 @@ An MCP server for [JByteMod Remastered](https://github.com/apkreader/JByteMod-Re
 | `edit_instruction` | Replace, insert, or remove an instruction. |
 | `list_constants` | List the LDC constants in a method. |
 | `replace_constant` | Replace a string, number, or type constant. |
+| `get_control_flow_graph` | Return normal and exception control-flow edges for a method. |
+| `find_dead_code` | Find unreachable instructions using ASM data-flow analysis. |
+| `analyze_stack_frames` | Show inferred local and operand-stack values at each instruction. |
+| `find_overrides` | Find loaded ancestor declarations and overriding methods. |
+| `find_implementations` | Find concrete implementations of a class or interface and resolve methods. |
+| `find_entry_points` | Find main, Java-agent, and JavaFX entry points. |
+| `search_instruction_pattern` | Search for contiguous opcode sequences across loaded methods. |
+| `detect_reflection_usage` | Find reflection, method-handle, proxy, Unsafe, and invokedynamic usage. |
+| `detect_native_methods` | Find methods declared with `ACC_NATIVE`. |
+| `compare_classes` | Compare metadata, fields, methods, and current bytecode for two classes. |
 | `select_class` | Select a class in the JByteMod UI. |
 | `select_method` | Select a method in the JByteMod UI. |
 

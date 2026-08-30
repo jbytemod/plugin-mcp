@@ -15,6 +15,11 @@ import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.commons.ClassRemapper;
 import org.objectweb.asm.commons.Remapper;
+import org.objectweb.asm.tree.analysis.Analyzer;
+import org.objectweb.asm.tree.analysis.AnalyzerException;
+import org.objectweb.asm.tree.analysis.BasicInterpreter;
+import org.objectweb.asm.tree.analysis.BasicValue;
+import org.objectweb.asm.tree.analysis.Frame;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FieldNode;
@@ -44,14 +49,17 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.ArrayDeque;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeSet;
 
 final class McpTools {
     private static final Gson GSON = new Gson();
@@ -329,6 +337,57 @@ final class McpTools {
                 schema(replaceConstantProperties, "class", "method", "descriptor", "instructionIndex",
                         "valueType", "value"), false, true, true));
 
+        tools.add(tool("get_control_flow_graph",
+                "Return normal and exception control-flow edges for a method.", methodSchema, true, true));
+        tools.add(tool("find_dead_code",
+                "Find unreachable real instructions in a method using ASM data-flow analysis.",
+                methodSchema, true, true));
+        JsonObject stackProperties = methodProperties.deepCopy();
+        stackProperties.add("offset", integerProperty("Zero-based instruction offset.", 0, null));
+        stackProperties.add("limit", integerProperty("Maximum analyzed instructions to return.", 1, MAX_LIMIT));
+        tools.add(tool("analyze_stack_frames",
+                "Show inferred local and operand-stack values before each instruction.",
+                schema(stackProperties, "class", "method", "descriptor"), true, true));
+        tools.add(tool("find_overrides",
+                "Find loaded declarations that a method overrides and loaded methods that override it.",
+                methodSchema, true, true));
+
+        JsonObject implementationProperties = classProperties.deepCopy();
+        implementationProperties.add("method", stringProperty("Optional method name to resolve on each implementation."));
+        implementationProperties.add("descriptor", stringProperty("Exact descriptor required when method is supplied."));
+        implementationProperties.add("offset", integerProperty("Zero-based result offset.", 0, null));
+        implementationProperties.add("limit", integerProperty("Maximum results to return.", 1, MAX_LIMIT));
+        tools.add(tool("find_implementations",
+                "Find loaded concrete implementations of a class or interface and optionally resolve a method.",
+                schema(implementationProperties, "class"), true, true));
+
+        tools.add(tool("find_entry_points",
+                "Find loaded main, agent, JavaFX, and other common JVM entry-point methods.",
+                schema(pagedProperties()), true, true));
+
+        JsonObject patternProperties = pagedProperties();
+        patternProperties.add("pattern", stringProperty(
+                "Opcode-name sequence separated by spaces or commas, for example ALOAD GETFIELD ARETURN."));
+        patternProperties.add("class", stringProperty("Optional class-name filter."));
+        tools.add(tool("search_instruction_pattern",
+                "Find contiguous real-instruction opcode sequences across loaded methods.",
+                schema(patternProperties, "pattern"), true, true));
+
+        JsonObject detectionProperties = pagedProperties();
+        detectionProperties.add("class", stringProperty("Optional class-name filter."));
+        tools.add(tool("detect_reflection_usage",
+                "Find reflection, method-handle, dynamic-proxy, and invokedynamic usage.",
+                schema(detectionProperties), true, true));
+        tools.add(tool("detect_native_methods", "Find methods declared with ACC_NATIVE.",
+                schema(detectionProperties), true, true));
+
+        JsonObject compareProperties = new JsonObject();
+        compareProperties.add("firstClass", stringProperty("First loaded class."));
+        compareProperties.add("secondClass", stringProperty("Second loaded class."));
+        tools.add(tool("compare_classes",
+                "Compare class metadata, fields, methods, and current bytecode.",
+                schema(compareProperties, "firstClass", "secondClass"), true, true));
+
         JsonObject decompileClassProperties = new JsonObject();
         decompileClassProperties.add("class", stringProperty("JVM internal or dotted class name."));
         decompileClassProperties.add("decompiler", decompilerProperty());
@@ -400,6 +459,16 @@ final class McpTools {
                 case "edit_instruction" -> editInstruction(arguments);
                 case "list_constants" -> listConstants(arguments);
                 case "replace_constant" -> replaceConstant(arguments);
+                case "get_control_flow_graph" -> controlFlowGraph(arguments);
+                case "find_dead_code" -> findDeadCode(arguments);
+                case "analyze_stack_frames" -> analyzeStackFrames(arguments);
+                case "find_overrides" -> findOverrides(arguments);
+                case "find_implementations" -> findImplementations(arguments);
+                case "find_entry_points" -> findEntryPoints(arguments);
+                case "search_instruction_pattern" -> searchInstructionPattern(arguments);
+                case "detect_reflection_usage" -> detectReflectionUsage(arguments);
+                case "detect_native_methods" -> detectNativeMethods(arguments);
+                case "compare_classes" -> compareClasses(arguments);
                 case "select_class" -> selectClass(arguments);
                 case "select_method" -> selectMethod(arguments);
                 default -> throw new IllegalArgumentException("Unknown tool: " + name);
@@ -1457,6 +1526,314 @@ final class McpTools {
         return result;
     }
 
+    private JsonObject controlFlowGraph(JsonObject arguments) {
+        ClassNode classNode = findClass(requiredString(arguments, "class"));
+        MethodNode method = findMethod(classNode, requiredString(arguments, "method"),
+                requiredString(arguments, "descriptor"));
+        Map<Integer, Set<Integer>> normalEdges = new LinkedHashMap<>();
+        Map<Integer, Set<Integer>> exceptionEdges = new LinkedHashMap<>();
+        Frame<BasicValue>[] frames = analyze(classNode, method, normalEdges, exceptionEdges);
+
+        JsonArray nodes = new JsonArray();
+        for (int index = 0; index < method.instructions.size(); index++) {
+            JsonObject node = instruction(method, index, method.instructions.get(index));
+            node.addProperty("reachable", frames[index] != null);
+            node.add("successors", GSON.toJsonTree(normalEdges.getOrDefault(index, Set.of())));
+            node.add("exceptionSuccessors", GSON.toJsonTree(exceptionEdges.getOrDefault(index, Set.of())));
+            nodes.add(node);
+        }
+        JsonObject result = new JsonObject();
+        result.addProperty("class", classNode.name);
+        result.addProperty("method", method.name);
+        result.addProperty("descriptor", method.desc);
+        result.addProperty("instructionCount", method.instructions.size());
+        result.addProperty("normalEdgeCount", edgeCount(normalEdges));
+        result.addProperty("exceptionEdgeCount", edgeCount(exceptionEdges));
+        result.add("nodes", nodes);
+        return result;
+    }
+
+    private JsonObject findDeadCode(JsonObject arguments) {
+        ClassNode classNode = findClass(requiredString(arguments, "class"));
+        MethodNode method = findMethod(classNode, requiredString(arguments, "method"),
+                requiredString(arguments, "descriptor"));
+        Frame<BasicValue>[] frames = analyze(classNode, method, null, null);
+        JsonArray unreachable = new JsonArray();
+        for (int index = 0; index < frames.length; index++) {
+            AbstractInsnNode insn = method.instructions.get(index);
+            if (frames[index] == null && insn.getOpcode() >= 0) {
+                unreachable.add(instruction(method, index, insn));
+            }
+        }
+        JsonObject result = new JsonObject();
+        result.addProperty("class", classNode.name);
+        result.addProperty("method", method.name);
+        result.addProperty("descriptor", method.desc);
+        result.addProperty("unreachableCount", unreachable.size());
+        result.add("instructions", unreachable);
+        return result;
+    }
+
+    private JsonObject analyzeStackFrames(JsonObject arguments) {
+        ClassNode classNode = findClass(requiredString(arguments, "class"));
+        MethodNode method = findMethod(classNode, requiredString(arguments, "method"),
+                requiredString(arguments, "descriptor"));
+        Frame<BasicValue>[] frames = analyze(classNode, method, null, null);
+        int offset = optionalInt(arguments, "offset", 0, 0, Integer.MAX_VALUE);
+        int limit = optionalInt(arguments, "limit", DEFAULT_LIMIT, 1, MAX_LIMIT);
+        int from = Math.min(offset, frames.length);
+        int to = Math.min(from + limit, frames.length);
+        JsonArray items = new JsonArray();
+        for (int index = from; index < to; index++) {
+            JsonObject item = instruction(method, index, method.instructions.get(index));
+            Frame<BasicValue> frame = frames[index];
+            item.addProperty("reachable", frame != null);
+            if (frame != null) {
+                JsonArray locals = new JsonArray();
+                for (int local = 0; local < frame.getLocals(); local++) {
+                    locals.add(frameValue(frame.getLocal(local)));
+                }
+                JsonArray stack = new JsonArray();
+                for (int slot = 0; slot < frame.getStackSize(); slot++) {
+                    stack.add(frameValue(frame.getStack(slot)));
+                }
+                item.add("locals", locals);
+                item.add("stack", stack);
+            }
+            items.add(item);
+        }
+        JsonObject result = new JsonObject();
+        result.addProperty("total", frames.length);
+        result.addProperty("offset", from);
+        result.addProperty("hasMore", to < frames.length);
+        result.add("frames", items);
+        return result;
+    }
+
+    private JsonObject findOverrides(JsonObject arguments) {
+        ClassNode owner = findClass(requiredString(arguments, "class"));
+        MethodNode target = findMethod(owner, requiredString(arguments, "method"),
+                requiredString(arguments, "descriptor"));
+        Map<String, ClassNode> available = classes();
+        JsonArray overriddenDeclarations = new JsonArray();
+        for (String ancestorName : ancestorNames(owner, available)) {
+            ClassNode ancestor = available.get(ancestorName);
+            if (ancestor == null) {
+                continue;
+            }
+            ancestor.methods.stream()
+                    .filter(method -> method.name.equals(target.name) && method.desc.equals(target.desc))
+                    .findFirst()
+                    .ifPresent(method -> overriddenDeclarations.add(memberResult(ancestor, method)));
+        }
+
+        JsonArray overridingMethods = new JsonArray();
+        for (ClassNode candidate : sortedClasses()) {
+            if (candidate == owner || !isSubtype(candidate, owner.name, available)) {
+                continue;
+            }
+            candidate.methods.stream()
+                    .filter(method -> method.name.equals(target.name) && method.desc.equals(target.desc))
+                    .findFirst()
+                    .ifPresent(method -> overridingMethods.add(memberResult(candidate, method)));
+        }
+        JsonObject result = new JsonObject();
+        result.addProperty("class", owner.name);
+        result.addProperty("method", target.name);
+        result.addProperty("descriptor", target.desc);
+        result.add("overrides", overriddenDeclarations);
+        result.add("overriddenBy", overridingMethods);
+        return result;
+    }
+
+    private JsonObject findImplementations(JsonObject arguments) {
+        ClassNode root = findClass(requiredString(arguments, "class"));
+        String methodName = nullableOptionalString(arguments, "method");
+        String descriptor = nullableOptionalString(arguments, "descriptor");
+        if ((methodName == null) != (descriptor == null)) {
+            throw new IllegalArgumentException("method and descriptor must be supplied together");
+        }
+        if (descriptor != null) {
+            validMethodDescriptor(descriptor);
+        }
+        Map<String, ClassNode> available = classes();
+        Page page = page(arguments);
+        for (ClassNode candidate : sortedClasses()) {
+            if ((candidate.access & (Opcodes.ACC_INTERFACE | Opcodes.ACC_ABSTRACT)) != 0
+                    || (!candidate.name.equals(root.name) && !isSubtype(candidate, root.name, available))) {
+                continue;
+            }
+            JsonObject item = new JsonObject();
+            item.addProperty("class", candidate.name);
+            item.addProperty("access", candidate.access);
+            if (methodName != null) {
+                MethodOwner resolved = resolveMethod(candidate, methodName, descriptor, available, new HashSet<>());
+                item.addProperty("implementsMethod", resolved != null
+                        && (resolved.method().access & Opcodes.ACC_ABSTRACT) == 0);
+                if (resolved != null) {
+                    item.addProperty("methodOwner", resolved.owner().name);
+                    item.addProperty("methodAccess", resolved.method().access);
+                }
+            }
+            page.add(item);
+        }
+        return page.result("implementations");
+    }
+
+    private JsonObject findEntryPoints(JsonObject arguments) {
+        Page page = page(arguments);
+        for (ClassNode classNode : sortedClasses()) {
+            for (MethodNode method : classNode.methods) {
+                String kind = entryPointKind(method);
+                if (kind != null) {
+                    JsonObject item = memberResult(classNode, method);
+                    item.addProperty("kind", kind);
+                    page.add(item);
+                }
+            }
+        }
+        return page.result("entryPoints");
+    }
+
+    private JsonObject searchInstructionPattern(JsonObject arguments) {
+        String[] pattern = Arrays.stream(requiredString(arguments, "pattern").toUpperCase(Locale.ROOT)
+                        .split("[\\s,]+"))
+                .filter(value -> !value.isBlank())
+                .toArray(String[]::new);
+        if (pattern.length == 0) {
+            throw new IllegalArgumentException("pattern must contain at least one opcode name");
+        }
+        for (String opcode : pattern) {
+            if (!isOpcodeName(opcode)) {
+                throw new IllegalArgumentException("Unknown JVM opcode name: " + opcode);
+            }
+        }
+        String classFilter = nullableOptionalString(arguments, "class");
+        if (classFilter != null) {
+            classFilter = classFilter.replace('.', '/').toLowerCase(Locale.ROOT);
+        }
+        Page page = page(arguments);
+        for (ClassNode classNode : sortedClasses()) {
+            if (classFilter != null && !classNode.name.toLowerCase(Locale.ROOT).contains(classFilter)) {
+                continue;
+            }
+            for (MethodNode method : classNode.methods) {
+                List<Integer> realIndices = new ArrayList<>();
+                List<String> opcodes = new ArrayList<>();
+                for (int index = 0; index < method.instructions.size(); index++) {
+                    int opcode = method.instructions.get(index).getOpcode();
+                    if (opcode >= 0) {
+                        realIndices.add(index);
+                        opcodes.add(opcodeName(opcode));
+                    }
+                }
+                for (int start = 0; start <= opcodes.size() - pattern.length; start++) {
+                    boolean matches = true;
+                    for (int part = 0; part < pattern.length; part++) {
+                        if (!pattern[part].equals(opcodes.get(start + part))) {
+                            matches = false;
+                            break;
+                        }
+                    }
+                    if (matches) {
+                        JsonObject item = memberResult(classNode, method);
+                        item.addProperty("startInstructionIndex", realIndices.get(start));
+                        item.addProperty("endInstructionIndex", realIndices.get(start + pattern.length - 1));
+                        page.add(item);
+                    }
+                }
+            }
+        }
+        return page.result("matches");
+    }
+
+    private JsonObject detectReflectionUsage(JsonObject arguments) {
+        String classFilter = nullableOptionalString(arguments, "class");
+        if (classFilter != null) {
+            classFilter = classFilter.replace('.', '/').toLowerCase(Locale.ROOT);
+        }
+        Page page = page(arguments);
+        for (ClassNode classNode : sortedClasses()) {
+            if (classFilter != null && !classNode.name.toLowerCase(Locale.ROOT).contains(classFilter)) {
+                continue;
+            }
+            for (MethodNode method : classNode.methods) {
+                for (int index = 0; index < method.instructions.size(); index++) {
+                    AbstractInsnNode insn = method.instructions.get(index);
+                    JsonObject item = null;
+                    if (insn instanceof MethodInsnNode call && isDynamicApi(call.owner, call.name)) {
+                        item = referenceLocation(classNode, method, index, insn);
+                        item.addProperty("kind", reflectionKind(call.owner));
+                        item.addProperty("target", call.owner + "." + call.name + call.desc);
+                    } else if (insn instanceof InvokeDynamicInsnNode dynamic) {
+                        item = referenceLocation(classNode, method, index, insn);
+                        item.addProperty("kind", "invokedynamic");
+                        item.addProperty("target", dynamic.name + dynamic.desc);
+                        item.addProperty("bootstrapMethod", dynamic.bsm.toString());
+                    }
+                    if (item != null) {
+                        page.add(item);
+                    }
+                }
+            }
+        }
+        return page.result("usages");
+    }
+
+    private JsonObject detectNativeMethods(JsonObject arguments) {
+        String classFilter = nullableOptionalString(arguments, "class");
+        if (classFilter != null) {
+            classFilter = classFilter.replace('.', '/').toLowerCase(Locale.ROOT);
+        }
+        Page page = page(arguments);
+        for (ClassNode classNode : sortedClasses()) {
+            if (classFilter != null && !classNode.name.toLowerCase(Locale.ROOT).contains(classFilter)) {
+                continue;
+            }
+            for (MethodNode method : classNode.methods) {
+                if ((method.access & Opcodes.ACC_NATIVE) != 0) {
+                    page.add(memberResult(classNode, method));
+                }
+            }
+        }
+        return page.result("nativeMethods");
+    }
+
+    private JsonObject compareClasses(JsonObject arguments) {
+        ClassNode first = findClass(requiredString(arguments, "firstClass"));
+        ClassNode second = findClass(requiredString(arguments, "secondClass"));
+        Set<String> firstFields = new TreeSet<>();
+        Set<String> secondFields = new TreeSet<>();
+        first.fields.forEach(field -> firstFields.add(field.name + " " + field.desc + " access=" + field.access));
+        second.fields.forEach(field -> secondFields.add(field.name + " " + field.desc + " access=" + field.access));
+        Set<String> firstMethods = new TreeSet<>();
+        Set<String> secondMethods = new TreeSet<>();
+        first.methods.forEach(method -> firstMethods.add(method.name + method.desc + " access=" + method.access));
+        second.methods.forEach(method -> secondMethods.add(method.name + method.desc + " access=" + method.access));
+        byte[] firstBytes = context.getClassBytes(first);
+        byte[] secondBytes = context.getClassBytes(second);
+
+        JsonObject metadata = new JsonObject();
+        addComparison(metadata, "version", first.version, second.version);
+        addComparison(metadata, "access", first.access, second.access);
+        addComparison(metadata, "superName", first.superName, second.superName);
+        addComparison(metadata, "signature", first.signature, second.signature);
+        addComparison(metadata, "interfaces", first.interfaces, second.interfaces);
+
+        JsonObject result = new JsonObject();
+        result.addProperty("firstClass", first.name);
+        result.addProperty("secondClass", second.name);
+        result.addProperty("bytecodeEqual", Arrays.equals(firstBytes, secondBytes));
+        result.addProperty("firstByteLength", firstBytes.length);
+        result.addProperty("secondByteLength", secondBytes.length);
+        result.add("metadata", metadata);
+        result.add("fieldsOnlyInFirst", GSON.toJsonTree(difference(firstFields, secondFields)));
+        result.add("fieldsOnlyInSecond", GSON.toJsonTree(difference(secondFields, firstFields)));
+        result.add("methodsOnlyInFirst", GSON.toJsonTree(difference(firstMethods, secondMethods)));
+        result.add("methodsOnlyInSecond", GSON.toJsonTree(difference(secondMethods, firstMethods)));
+        return result;
+    }
+
     private JsonElement methodBytecode(JsonObject arguments) {
         ClassNode classNode = findClass(requiredString(arguments, "class"));
         MethodNode method = findMethod(classNode, requiredString(arguments, "method"),
@@ -1908,6 +2285,188 @@ final class McpTools {
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Field not found: " + classNode.name + "#" + name + " " + descriptor));
+    }
+
+    private static Frame<BasicValue>[] analyze(ClassNode owner, MethodNode method,
+                                                Map<Integer, Set<Integer>> normalEdges,
+                                                Map<Integer, Set<Integer>> exceptionEdges) {
+        Analyzer<BasicValue> analyzer;
+        if (normalEdges == null && exceptionEdges == null) {
+            analyzer = new Analyzer<>(new BasicInterpreter());
+        } else {
+            analyzer = new Analyzer<>(new BasicInterpreter()) {
+                @Override
+                protected void newControlFlowEdge(int instructionIndex, int successorIndex) {
+                    if (normalEdges != null) {
+                        normalEdges.computeIfAbsent(instructionIndex, ignored -> new TreeSet<>())
+                                .add(successorIndex);
+                    }
+                }
+
+                @Override
+                protected boolean newControlFlowExceptionEdge(int instructionIndex, int successorIndex) {
+                    if (exceptionEdges != null) {
+                        exceptionEdges.computeIfAbsent(instructionIndex, ignored -> new TreeSet<>())
+                                .add(successorIndex);
+                    }
+                    return true;
+                }
+            };
+        }
+        try {
+            return analyzer.analyze(owner.name, method);
+        } catch (AnalyzerException exception) {
+            throw new IllegalArgumentException("ASM analysis failed for " + owner.name + "."
+                    + method.name + method.desc + ": " + exception.getMessage());
+        }
+    }
+
+    private static int edgeCount(Map<Integer, Set<Integer>> edges) {
+        return edges.values().stream().mapToInt(Set::size).sum();
+    }
+
+    private static String frameValue(BasicValue value) {
+        if (value == null) {
+            return "null";
+        }
+        if (value == BasicValue.UNINITIALIZED_VALUE) {
+            return "uninitialized";
+        }
+        if (value == BasicValue.RETURNADDRESS_VALUE) {
+            return "returnAddress";
+        }
+        Type type = value.getType();
+        return type == null ? value.toString() : type.getDescriptor();
+    }
+
+    private static Set<String> ancestorNames(ClassNode root, Map<String, ClassNode> available) {
+        Set<String> result = new LinkedHashSet<>();
+        ArrayDeque<String> pending = new ArrayDeque<>();
+        if (root.superName != null) {
+            pending.add(root.superName);
+        }
+        pending.addAll(root.interfaces);
+        while (!pending.isEmpty()) {
+            String name = pending.removeFirst();
+            if (!result.add(name)) {
+                continue;
+            }
+            ClassNode node = available.get(name);
+            if (node != null) {
+                if (node.superName != null) {
+                    pending.addLast(node.superName);
+                }
+                pending.addAll(node.interfaces);
+            }
+        }
+        return result;
+    }
+
+    private static boolean isSubtype(ClassNode candidate, String target, Map<String, ClassNode> available) {
+        return candidate.name.equals(target) || ancestorNames(candidate, available).contains(target);
+    }
+
+    private static MethodOwner resolveMethod(ClassNode start, String name, String descriptor,
+                                             Map<String, ClassNode> available, Set<String> visited) {
+        if (start == null || !visited.add(start.name)) {
+            return null;
+        }
+        for (MethodNode method : start.methods) {
+            if (method.name.equals(name) && method.desc.equals(descriptor)) {
+                return new MethodOwner(start, method);
+            }
+        }
+        MethodOwner inherited = resolveMethod(available.get(start.superName), name, descriptor, available, visited);
+        if (inherited != null) {
+            return inherited;
+        }
+        for (String interfaceName : start.interfaces) {
+            inherited = resolveMethod(available.get(interfaceName), name, descriptor, available, visited);
+            if (inherited != null) {
+                return inherited;
+            }
+        }
+        return null;
+    }
+
+    private static JsonObject memberResult(ClassNode owner, MethodNode method) {
+        JsonObject item = new JsonObject();
+        item.addProperty("class", owner.name);
+        item.addProperty("method", method.name);
+        item.addProperty("descriptor", method.desc);
+        item.addProperty("access", method.access);
+        return item;
+    }
+
+    private static String entryPointKind(MethodNode method) {
+        boolean isStatic = (method.access & Opcodes.ACC_STATIC) != 0;
+        boolean isPublic = (method.access & Opcodes.ACC_PUBLIC) != 0;
+        if (isPublic && isStatic && "main".equals(method.name)
+                && "([Ljava/lang/String;)V".equals(method.desc)) {
+            return "main";
+        }
+        if (isStatic && ("premain".equals(method.name) || "agentmain".equals(method.name))
+                && ("(Ljava/lang/String;)V".equals(method.desc)
+                || "(Ljava/lang/String;Ljava/lang/instrument/Instrumentation;)V".equals(method.desc))) {
+            return method.name;
+        }
+        if (isPublic && !isStatic && "start".equals(method.name)
+                && "(Ljavafx/stage/Stage;)V".equals(method.desc)) {
+            return "javafx";
+        }
+        return null;
+    }
+
+    private static boolean isOpcodeName(String name) {
+        for (String opcode : Printer.OPCODES) {
+            if (name.equals(opcode)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isDynamicApi(String owner, String name) {
+        if (owner.startsWith("java/lang/reflect/") || owner.startsWith("java/lang/invoke/")) {
+            return true;
+        }
+        if ("sun/misc/Unsafe".equals(owner) || "jdk/internal/misc/Unsafe".equals(owner)) {
+            return true;
+        }
+        return "java/lang/Class".equals(owner)
+                && ("forName".equals(name) || name.startsWith("getDeclared")
+                || name.startsWith("getMethod") || name.startsWith("getField")
+                || "newInstance".equals(name));
+    }
+
+    private static String reflectionKind(String owner) {
+        if (owner.startsWith("java/lang/invoke/")) {
+            return "method-handle";
+        }
+        if (owner.endsWith("Unsafe")) {
+            return "unsafe";
+        }
+        if ("java/lang/reflect/Proxy".equals(owner)) {
+            return "dynamic-proxy";
+        }
+        return "reflection";
+    }
+
+    private static void addComparison(JsonObject result, String name, Object first, Object second) {
+        JsonObject comparison = new JsonObject();
+        comparison.add("first", GSON.toJsonTree(first));
+        comparison.add("second", GSON.toJsonTree(second));
+        comparison.addProperty("equal", Objects.equals(first, second));
+        result.add(name, comparison);
+    }
+
+    private static List<String> difference(Set<String> left, Set<String> right) {
+        List<String> result = new ArrayList<>(left);
+        result.removeAll(right);
+        return result;
+    }
+
+    private record MethodOwner(ClassNode owner, MethodNode method) {
     }
 
     private static String normalizeClassName(String name) {
