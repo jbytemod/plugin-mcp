@@ -78,7 +78,9 @@ Add that URL as an HTTP MCP server in your client. For clients using JSON config
 
 The exact configuration format depends on the MCP client. The server only accepts connections from the local machine.
 
-To use a different port, launch JByteMod with:
+The port and server state can be changed from **Plugins > MCP Server**. The settings are kept across restarts.
+
+To override the saved port at launch, use:
 
 ```text
 -Djbytemod.mcp.port=9000
