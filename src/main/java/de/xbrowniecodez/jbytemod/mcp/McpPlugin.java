@@ -1,12 +1,16 @@
 package de.xbrowniecodez.jbytemod.mcp;
 
+import de.xbrowniecodez.jbytemod.mcp.api.McpToolProvider;
 import de.xbrowniecodez.jbytemod.plugin.Plugin;
 import org.objectweb.asm.tree.ClassNode;
 
 import javax.swing.SwingUtilities;
 import java.awt.Window;
 import java.net.BindException;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.prefs.BackingStoreException;
 import java.util.prefs.Preferences;
 
@@ -17,6 +21,7 @@ public final class McpPlugin extends Plugin {
     private static final String ENABLED_PREFERENCE = "enabled";
     private static final int PORT_SEARCH_LIMIT = 100;
     private static final Preferences PREFERENCES = Preferences.userNodeForPackage(McpPlugin.class);
+    private static final CopyOnWriteArrayList<McpToolProvider> TOOL_PROVIDERS = new CopyOnWriteArrayList<>();
 
     private final McpActivityLog activityLog = new McpActivityLog();
     private McpServer server;
@@ -27,6 +32,16 @@ public final class McpPlugin extends Plugin {
 
     public McpPlugin() {
         super("MCP Server", getPluginVersion(), "brownie");
+    }
+
+    public static AutoCloseable registerToolProvider(McpToolProvider provider) {
+        McpToolProvider registered = Objects.requireNonNull(provider, "provider");
+        TOOL_PROVIDERS.addIfAbsent(registered);
+        return () -> TOOL_PROVIDERS.remove(registered);
+    }
+
+    static List<McpToolProvider> getToolProviders() {
+        return List.copyOf(TOOL_PROVIDERS);
     }
 
     private static String getPluginVersion() {

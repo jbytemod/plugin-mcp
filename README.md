@@ -138,6 +138,10 @@ Download the plugin JAR from the [releases page](https://github.com/jbytemod/plu
 
 Restart JByteMod after copying the plugin. The plugin will appear as **MCP Server** in the plugin menu.
 
+## Tool extensions
+
+Other JByteMod plugins can optionally depend on this plugin and register their own MCP tools through `McpPlugin.registerToolProvider`. Providers are discovered dynamically, so their tools appear only while both plugins are enabled. The [Native Module Dumper](https://github.com/jbytemod/plugin-native-module-dumper) uses this integration to expose native-library listing and dumping tools.
+
 ## Activity dashboard
 
 Open **Plugins > MCP Server** to view the live MCP activity dashboard. It shows:

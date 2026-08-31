@@ -4,6 +4,8 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import de.xbrowniecodez.jbytemod.mcp.api.McpToolDefinition;
+import de.xbrowniecodez.jbytemod.mcp.api.McpToolProvider;
 import de.xbrowniecodez.jbytemod.plugin.ArchiveInfo;
 import de.xbrowniecodez.jbytemod.plugin.ArchiveType;
 import de.xbrowniecodez.jbytemod.plugin.JvmProcess;
@@ -461,6 +463,8 @@ final class McpTools {
         tools.add(tool("select_method", "Select a method in the JByteMod UI.",
                 methodSchema, false, true));
 
+        addProvidedTools(tools);
+
         result.add("tools", tools);
         if (modern) {
             result.addProperty("ttlMs", 60_000);
@@ -544,7 +548,7 @@ final class McpTools {
                 case "compare_classes" -> compareClasses(arguments);
                 case "select_class" -> selectClass(arguments);
                 case "select_method" -> selectMethod(arguments);
-                default -> throw new IllegalArgumentException("Unknown tool: " + name);
+                default -> callProvidedTool(name, arguments);
             };
             return toolResult(output, false);
         } catch (IllegalArgumentException exception) {
@@ -553,6 +557,33 @@ final class McpTools {
             String message = exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
             return toolResult(new com.google.gson.JsonPrimitive(message), true);
         }
+    }
+
+    private void addProvidedTools(JsonArray tools) {
+        Set<String> names = new HashSet<>();
+        for (JsonElement element : tools) {
+            names.add(element.getAsJsonObject().get("name").getAsString());
+        }
+        for (McpToolProvider provider : McpPlugin.getToolProviders()) {
+            for (McpToolDefinition definition : provider.tools()) {
+                if (!names.add(definition.name())) continue;
+                JsonElement schema = GSON.toJsonTree(definition.inputSchema());
+                if (!schema.isJsonObject()) continue;
+                tools.add(tool(definition.name(), definition.description(), schema.getAsJsonObject(),
+                        definition.readOnly(), definition.destructive(), definition.idempotent()));
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private JsonElement callProvidedTool(String name, JsonObject arguments) throws Exception {
+        for (McpToolProvider provider : McpPlugin.getToolProviders()) {
+            boolean provided = provider.tools().stream().anyMatch(tool -> tool.name().equals(name));
+            if (!provided) continue;
+            Map<String, Object> values = GSON.fromJson(arguments, Map.class);
+            return GSON.toJsonTree(provider.call(name, Map.copyOf(values)));
+        }
+        throw new IllegalArgumentException("Unknown tool: " + name);
     }
 
     private JsonObject openFile(JsonObject arguments) throws Exception {
