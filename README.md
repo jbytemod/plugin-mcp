@@ -1,6 +1,6 @@
 # JByteMod MCP Plugin
 
-An MCP server for [JByteMod Remastered](https://github.com/apkreader/JByteMod-Remastered). It allows MCP-compatible clients to inspect and modify the archive currently loaded in JByteMod.
+An MCP server for [JByteMod Remastered](https://github.com/jbytemod/JByteMod-Remastered). It allows MCP-compatible clients to inspect and modify the archive currently loaded in JByteMod.
 
 ## Supported tools
 
@@ -185,7 +185,7 @@ You can also start or stop the server from the plugin menu.
 JByteMod 2.11.0, JDK 21, and Maven are required. The matching JByteMod API artifact must be installed in your local Maven repository first:
 
 ```sh
-git clone https://github.com/apkreader/JByteMod-Remastered.git
+git clone https://github.com/jbytemod/JByteMod-Remastered.git
 git clone https://github.com/jbytemod/plugin-mcp.git
 
 mvn -f JByteMod-Remastered/pom.xml -pl jbytemod-api -am install -DskipTests
