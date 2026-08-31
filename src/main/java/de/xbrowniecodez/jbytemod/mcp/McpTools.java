@@ -344,6 +344,18 @@ final class McpTools {
         methodCallProperties.add("limit", integerProperty("Maximum calls to return.", 1, MAX_LIMIT));
         tools.add(tool("method_calls", "Show incoming and outgoing calls for a method.",
                 schema(methodCallProperties, "class", "method", "descriptor"), true, true));
+        JsonObject callGraphProperties = methodProperties.deepCopy();
+        callGraphProperties.add("direction", enumProperty(
+                "Call traversal direction. Defaults to both.", "incoming", "outgoing", "both"));
+        callGraphProperties.add("depth", integerProperty(
+                "Maximum traversal depth. Defaults to 2.", 1, 5));
+        callGraphProperties.add("includeExternal", booleanProperty(
+                "Include referenced methods that are not present in the active archive. Defaults to false."));
+        callGraphProperties.add("maxNodes", integerProperty(
+                "Maximum number of graph nodes. Defaults to 200.", 1, MAX_LIMIT));
+        tools.add(tool("get_call_graph",
+                "Build a multi-level call graph with individual call-site instruction indices.",
+                schema(callGraphProperties, "class", "method", "descriptor"), true, true));
         JsonObject decompileMethodProperties = methodProperties.deepCopy();
         decompileMethodProperties.add("decompiler", decompilerProperty());
         tools.add(tool("decompile_method", "Decompile one method with a JByteMod decompiler.",
@@ -509,6 +521,7 @@ final class McpTools {
                 case "edit_class_metadata" -> editClassMetadata(arguments);
                 case "get_method_bytecode" -> methodBytecode(arguments);
                 case "method_calls" -> methodCalls(arguments);
+                case "get_call_graph" -> callGraph(arguments);
                 case "decompile_class" -> decompileClass(arguments);
                 case "decompile_method" -> decompileMethod(arguments);
                 case "list_instructions" -> listInstructions(arguments);
@@ -1164,6 +1177,174 @@ final class McpTools {
             }
         }
         return page.result("calls");
+    }
+
+    private JsonObject callGraph(JsonObject arguments) {
+        ClassNode rootClass = findClass(requiredString(arguments, "class"));
+        MethodNode rootMethod = findMethod(rootClass, requiredString(arguments, "method"),
+                requiredString(arguments, "descriptor"));
+        String direction = optionalString(arguments, "direction", "both").toLowerCase(Locale.ROOT);
+        if (!Set.of("incoming", "outgoing", "both").contains(direction)) {
+            throw new IllegalArgumentException("Unsupported call direction: " + direction);
+        }
+        int maximumDepth = optionalInt(arguments, "depth", 2, 1, 5);
+        boolean includeExternal = optionalBoolean(arguments, "includeExternal", false);
+        int maximumNodes = optionalInt(arguments, "maxNodes", 200, 1, MAX_LIMIT);
+
+        CallGraphIndex index = buildCallGraphIndex();
+        MethodKey root = new MethodKey(rootClass.name, rootMethod.name, rootMethod.desc);
+        LinkedHashMap<MethodKey, Integer> nodes = new LinkedHashMap<>();
+        LinkedHashSet<CallSite> edges = new LinkedHashSet<>();
+        ArrayDeque<GraphVisit> pending = new ArrayDeque<>();
+        nodes.put(root, 0);
+        pending.add(new GraphVisit(root, 0));
+        boolean truncated = false;
+
+        while (!pending.isEmpty()) {
+            GraphVisit visit = pending.removeFirst();
+            if (visit.depth() >= maximumDepth) {
+                continue;
+            }
+            if (!"incoming".equals(direction)) {
+                for (CallSite edge : index.outgoing().getOrDefault(visit.method(), List.of())) {
+                    if (!includeExternal && !index.methods().containsKey(edge.target())) {
+                        continue;
+                    }
+                    if (!nodes.containsKey(edge.target()) && nodes.size() >= maximumNodes) {
+                        truncated = true;
+                        continue;
+                    }
+                    edges.add(edge);
+                    if (addGraphNode(nodes, edge.target(), visit.depth() + 1)) {
+                        if (index.methods().containsKey(edge.target())) {
+                            pending.addLast(new GraphVisit(edge.target(), visit.depth() + 1));
+                        }
+                    }
+                }
+            }
+            if (!"outgoing".equals(direction)) {
+                for (CallSite edge : index.incoming().getOrDefault(visit.method(), List.of())) {
+                    if (!nodes.containsKey(edge.source()) && nodes.size() >= maximumNodes) {
+                        truncated = true;
+                        continue;
+                    }
+                    edges.add(edge);
+                    if (addGraphNode(nodes, edge.source(), visit.depth() + 1)) {
+                        pending.addLast(new GraphVisit(edge.source(), visit.depth() + 1));
+                    }
+                }
+            }
+        }
+
+        JsonArray nodeArray = new JsonArray();
+        for (Map.Entry<MethodKey, Integer> entry : nodes.entrySet()) {
+            nodeArray.add(callGraphNode(entry.getKey(), index.methods().get(entry.getKey()), entry.getValue()));
+        }
+        JsonArray edgeArray = new JsonArray();
+        for (CallSite edge : edges) {
+            edgeArray.add(callGraphEdge(edge));
+        }
+
+        JsonObject result = new JsonObject();
+        result.add("root", methodReference(root));
+        result.addProperty("direction", direction);
+        result.addProperty("depth", maximumDepth);
+        result.addProperty("includeExternal", includeExternal);
+        result.addProperty("maxNodes", maximumNodes);
+        result.addProperty("nodeCount", nodes.size());
+        result.addProperty("edgeCount", edges.size());
+        result.addProperty("truncated", truncated);
+        result.addProperty("resolution", "static bytecode references");
+        result.add("nodes", nodeArray);
+        result.add("edges", edgeArray);
+        return result;
+    }
+
+    private CallGraphIndex buildCallGraphIndex() {
+        LinkedHashMap<MethodKey, MethodOwner> methods = new LinkedHashMap<>();
+        LinkedHashMap<MethodKey, List<CallSite>> outgoing = new LinkedHashMap<>();
+        LinkedHashMap<MethodKey, List<CallSite>> incoming = new LinkedHashMap<>();
+
+        for (ClassNode classNode : sortedClasses()) {
+            for (MethodNode method : classNode.methods) {
+                methods.put(new MethodKey(classNode.name, method.name, method.desc),
+                        new MethodOwner(classNode, method));
+            }
+        }
+        for (Map.Entry<MethodKey, MethodOwner> entry : methods.entrySet()) {
+            MethodKey source = entry.getKey();
+            MethodNode method = entry.getValue().method();
+            for (int index = 0; index < method.instructions.size(); index++) {
+                AbstractInsnNode instruction = method.instructions.get(index);
+                if (instruction instanceof MethodInsnNode call) {
+                    addCallSite(outgoing, incoming, new CallSite(source,
+                            new MethodKey(call.owner, call.name, call.desc), index,
+                            opcodeName(call.getOpcode()), false));
+                } else if (instruction instanceof InvokeDynamicInsnNode dynamic) {
+                    LinkedHashSet<MethodKey> targets = new LinkedHashSet<>();
+                    for (Object argument : dynamic.bsmArgs) {
+                        collectDynamicCallTargets(argument, targets);
+                    }
+                    for (MethodKey target : targets) {
+                        addCallSite(outgoing, incoming, new CallSite(source, target, index,
+                                "INVOKEDYNAMIC", true));
+                    }
+                }
+            }
+        }
+        return new CallGraphIndex(methods, outgoing, incoming);
+    }
+
+    private static boolean addGraphNode(Map<MethodKey, Integer> nodes, MethodKey method, int depth) {
+        Integer previousDepth = nodes.putIfAbsent(method, depth);
+        return previousDepth == null;
+    }
+
+    private static void addCallSite(Map<MethodKey, List<CallSite>> outgoing,
+                                    Map<MethodKey, List<CallSite>> incoming, CallSite callSite) {
+        outgoing.computeIfAbsent(callSite.source(), ignored -> new ArrayList<>()).add(callSite);
+        incoming.computeIfAbsent(callSite.target(), ignored -> new ArrayList<>()).add(callSite);
+    }
+
+    private static void collectDynamicCallTargets(Object value, Set<MethodKey> targets) {
+        if (value instanceof Handle handle) {
+            if (handle.getTag() >= Opcodes.H_INVOKEVIRTUAL && handle.getTag() <= Opcodes.H_INVOKEINTERFACE) {
+                targets.add(new MethodKey(handle.getOwner(), handle.getName(), handle.getDesc()));
+            }
+        } else if (value instanceof ConstantDynamic dynamic) {
+            for (int index = 0; index < dynamic.getBootstrapMethodArgumentCount(); index++) {
+                collectDynamicCallTargets(dynamic.getBootstrapMethodArgument(index), targets);
+            }
+        }
+    }
+
+    private static JsonObject callGraphNode(MethodKey method, MethodOwner loadedMethod, int depth) {
+        JsonObject result = methodReference(method);
+        result.addProperty("depth", depth);
+        result.addProperty("loaded", loadedMethod != null);
+        if (loadedMethod != null) {
+            result.addProperty("access", loadedMethod.method().access);
+            result.addProperty("instructionCount", loadedMethod.method().instructions.size());
+        }
+        return result;
+    }
+
+    private static JsonObject callGraphEdge(CallSite edge) {
+        JsonObject result = new JsonObject();
+        result.add("source", methodReference(edge.source()));
+        result.add("target", methodReference(edge.target()));
+        result.addProperty("instructionIndex", edge.instructionIndex());
+        result.addProperty("opcode", edge.opcode());
+        result.addProperty("invokedynamic", edge.invokeDynamic());
+        return result;
+    }
+
+    private static JsonObject methodReference(MethodKey method) {
+        JsonObject result = new JsonObject();
+        result.addProperty("class", method.owner());
+        result.addProperty("method", method.name());
+        result.addProperty("descriptor", method.descriptor());
+        return result;
     }
 
     private JsonObject describeClass(JsonObject arguments) {
@@ -2724,6 +2905,21 @@ final class McpTools {
     }
 
     private record MethodOwner(ClassNode owner, MethodNode method) {
+    }
+
+    private record MethodKey(String owner, String name, String descriptor) {
+    }
+
+    private record CallSite(MethodKey source, MethodKey target, int instructionIndex,
+                            String opcode, boolean invokeDynamic) {
+    }
+
+    private record GraphVisit(MethodKey method, int depth) {
+    }
+
+    private record CallGraphIndex(Map<MethodKey, MethodOwner> methods,
+                                  Map<MethodKey, List<CallSite>> outgoing,
+                                  Map<MethodKey, List<CallSite>> incoming) {
     }
 
     private static String normalizeClassName(String name) {

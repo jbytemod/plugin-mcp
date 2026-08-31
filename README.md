@@ -57,6 +57,7 @@ An MCP server for [JByteMod Remastered](https://github.com/apkreader/JByteMod-Re
 | `describe_class` | Show class metadata, interfaces, fields, and method signatures. |
 | `class_hierarchy` | Show loaded ancestors and direct or transitive subtypes. |
 | `method_calls` | Find incoming and outgoing calls for a method. |
+| `get_call_graph` | Build a bounded callers/callees graph with exact call-site instruction indices. |
 | `find_overrides` | Find loaded ancestor declarations and overriding methods. |
 | `find_implementations` | Find concrete implementations of a class or interface and resolve methods. |
 | `find_entry_points` | Find main, Java-agent, and JavaFX entry points. |
