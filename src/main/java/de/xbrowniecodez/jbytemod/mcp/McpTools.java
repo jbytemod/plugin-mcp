@@ -122,6 +122,9 @@ final class McpTools {
         tools.add(tool("set_attached_jvm_frozen",
                 "Freeze or resume the entire attached JVM process.",
                 schema(frozenProperties, "frozen"), false, false, true));
+        tools.add(tool("detach_jvm",
+                "Detach from the attached JVM without stopping it. Loaded classes remain available as a local snapshot.",
+                schema(new JsonObject()), false, true, false));
         tools.add(tool("terminate_attached_jvm",
                 "Immediately terminate the attached JVM process. Loaded classes remain available as a local snapshot.",
                 schema(new JsonObject()), false, true, false));
@@ -479,6 +482,7 @@ final class McpTools {
                 case "refresh_attached_jvm" -> refreshAttachedJvm();
                 case "apply_changes" -> applyChanges();
                 case "set_attached_jvm_frozen" -> setAttachedJvmFrozen(arguments);
+                case "detach_jvm" -> detachJvm();
                 case "terminate_attached_jvm" -> terminateAttachedJvm();
                 case "archive_summary" -> archiveSummary();
                 case "list_changes" -> listChanges();
@@ -617,6 +621,15 @@ final class McpTools {
         context.setAttachedJvmFrozen(frozen);
         JsonObject result = new JsonObject();
         result.addProperty("frozen", frozen);
+        return result;
+    }
+
+    private JsonObject detachJvm() throws Exception {
+        context.detachFromAttachedJvm();
+        workspace.reset(context.getCurrentFile());
+        JsonObject result = archiveSummary();
+        result.addProperty("detached", true);
+        result.addProperty("snapshotAvailable", true);
         return result;
     }
 

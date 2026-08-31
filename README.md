@@ -18,6 +18,7 @@ An MCP server for [JByteMod Remastered](https://github.com/jbytemod/JByteMod-Rem
 | `refresh_attached_jvm` | Reload classes from the attached JVM and discard unapplied in-memory edits. |
 | `apply_changes` | Redefine modified classes in the attached JVM. |
 | `set_attached_jvm_frozen` | Freeze or resume the entire attached JVM process. |
+| `detach_jvm` | Detach from the JVM without stopping it and retain the loaded classes as a local snapshot. |
 | `terminate_attached_jvm` | Terminate the attached JVM while retaining its loaded classes as a local snapshot. |
 
 ### Change tracking and safety
@@ -125,7 +126,7 @@ Use `save_file` to write the current archive to disk or dump the classes loaded 
 
 Resource tools operate on JAR and APK entries that are not class files. Large resources can be read in chunks with `offset` and `length`; writes accept Base64 and are limited to 32 MiB per entry. `export_class` and `export_package` write selected bytecode without saving the complete active archive.
 
-`set_attached_jvm_frozen` pauses the entire target process, including its UI and agent connection. Resume it before refreshing classes or applying changes. `terminate_attached_jvm` automatically resumes a frozen target before terminating it.
+`set_attached_jvm_frozen` pauses the entire target process, including its UI and agent connection. Resume it before refreshing classes or applying changes. `detach_jvm` and `terminate_attached_jvm` automatically resume a frozen target; detaching leaves the target running, while terminating stops it.
 
 ## Installation
 
