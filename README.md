@@ -10,7 +10,7 @@ An MCP server for [JByteMod Remastered](https://github.com/jbytemod/JByteMod-Rem
 | --- | --- |
 | `archive_summary` | Show the archive type, source, class/resource counts, and current selection. |
 | `open_file` | Open a local JAR, class, or APK in the current JByteMod window. |
-| `save_file` | Save the active archive, class, or attached-JVM class dump to a local file. |
+| `save_file` | Save the active archive, class, APK, or attached-JVM class dump; APKs support debug or custom JKS/PKCS#12 signing. |
 | `export_class` | Write one current class file to disk. |
 | `export_package` | Write a package and optionally its subpackages to a JAR. |
 | `list_jvms` | List running local JVM processes that are available for attachment. |
@@ -122,7 +122,7 @@ Whole-class replacement is also supported through `get_class_file` and `replace_
 
 Changes are made to JByteMod's in-memory archive. They are not written to disk automatically. For an attached process, use `validate_hotswap` before `apply_changes`. Standard JVM redefinition restrictions still apply, so structural tools such as adding or removing fields or methods, changing inheritance, and renaming classes cannot normally be applied to an already loaded class. They remain useful for archives that will be saved to disk.
 
-Use `save_file` to write the current archive to disk or dump the classes loaded from an attached JVM into a JAR. Existing output files are overwritten.
+Use `save_file` to write the current archive to disk or dump the classes loaded from an attached JVM into a JAR. Existing output files are overwritten. APK output is aligned, signed, and signature-verified. Omit `keystorePath` to use JByteMod's persistent debug key, or provide `keystorePath`, `storePassword`, and optionally `keyAlias` and `keyPassword` to use a JKS/PKCS#12 signing key. Signing passwords are used only for the current tool call and are not written to plugin settings or the activity log.
 
 Resource tools operate on JAR and APK entries that are not class files. Large resources can be read in chunks with `offset` and `length`; writes accept Base64 and are limited to 32 MiB per entry. `export_class` and `export_package` write selected bytecode without saving the complete active archive.
 

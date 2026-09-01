@@ -6,6 +6,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import de.xbrowniecodez.jbytemod.mcp.api.McpToolDefinition;
 import de.xbrowniecodez.jbytemod.mcp.api.McpToolProvider;
+import de.xbrowniecodez.jbytemod.plugin.ApkSigningOptions;
 import de.xbrowniecodez.jbytemod.plugin.ArchiveInfo;
 import de.xbrowniecodez.jbytemod.plugin.ArchiveType;
 import de.xbrowniecodez.jbytemod.plugin.JvmProcess;
@@ -101,8 +102,20 @@ final class McpTools {
 
         JsonObject saveFileProperties = new JsonObject();
         saveFileProperties.add("path", stringProperty("Absolute or working-directory-relative output path."));
+        saveFileProperties.add("keystorePath", stringProperty(
+                "Optional JKS or PKCS#12 keystore path for APK signing. Omit to use JByteMod's debug key."));
+        saveFileProperties.add("keyAlias", stringProperty(
+                "Optional private-key alias. May be omitted when the keystore contains one private key."));
+        JsonObject storePasswordProperty = stringProperty(
+                "Keystore password. Required when keystorePath is provided; may be empty.");
+        storePasswordProperty.addProperty("writeOnly", true);
+        saveFileProperties.add("storePassword", storePasswordProperty);
+        JsonObject keyPasswordProperty = stringProperty(
+                "Optional private-key password. Defaults to storePassword.");
+        keyPasswordProperty.addProperty("writeOnly", true);
+        saveFileProperties.add("keyPassword", keyPasswordProperty);
         tools.add(tool("save_file",
-                "Save the active archive or runtime class dump to a local file. Existing files are overwritten.",
+                "Save the active archive, APK, or runtime class dump. APKs are aligned, signed with a debug or custom key, and verified. Existing files are overwritten.",
                 schema(saveFileProperties, "path"), false, true, true));
 
         tools.add(tool("list_jvms", "List local JVM processes that JByteMod can attach to.",
@@ -597,10 +610,35 @@ final class McpTools {
     }
 
     private JsonObject saveFile(JsonObject arguments) throws Exception {
-        String outputPath = context.saveFile(requiredString(arguments, "path"));
+        String keystorePath = nullableOptionalString(arguments, "keystorePath");
+        char[] storePassword = null;
+        char[] keyPassword = null;
+        String outputPath;
+        String signingKey;
+        try (ApkSigningOptions signingOptions = keystorePath == null
+                ? ApkSigningOptions.debugKey()
+                : ApkSigningOptions.customKey(Path.of(keystorePath),
+                        optionalString(arguments, "keyAlias", ""),
+                        storePassword = requiredStringAllowEmpty(arguments, "storePassword").toCharArray(),
+                        keyPassword = optionalString(arguments, "keyPassword", "").toCharArray())) {
+            signingKey = signingOptions.usesDebugKey() ? "debug" : "custom";
+            outputPath = context.saveFile(requiredString(arguments, "path"), signingOptions);
+        } finally {
+            if (storePassword != null) {
+                Arrays.fill(storePassword, '\0');
+            }
+            if (keyPassword != null) {
+                Arrays.fill(keyPassword, '\0');
+            }
+        }
         workspace.markClean(context.getCurrentFile());
         JsonObject result = new JsonObject();
         result.addProperty("path", outputPath);
+        if (context.getArchiveInfo().type() == ArchiveType.APK) {
+            result.addProperty("signingKey", signingKey);
+            result.addProperty("aligned", true);
+            result.addProperty("signatureVerified", true);
+        }
         result.addProperty("saved", true);
         return result;
     }
@@ -679,6 +717,7 @@ final class McpTools {
             case REMOTE_JVM -> "remote JVM";
             case CURRENT_JVM -> "current JVM";
             case CLASS -> "class";
+            case APK -> "apk";
             case ARCHIVE -> "archive";
             case NONE -> throw new IllegalArgumentException("No archive is open in JByteMod");
         });
